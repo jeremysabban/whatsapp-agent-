@@ -406,7 +406,7 @@ export default function WhatsAppAgent() {
                 </div>
               </div>
 
-              {/* Projects Section */}
+              {/* Projects Section with Tasks */}
               {(dossierOverview.projects?.active?.length > 0) && (
                 <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                   <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
@@ -414,35 +414,56 @@ export default function WhatsAppAgent() {
                     <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">{dossierOverview.projects.active.length}</span>
                   </div>
                   <div className="divide-y divide-gray-50">
-                    {dossierOverview.projects.active.map(p => (
-                      <a key={p.id} href={p.url} target="_blank" rel="noopener" className="flex items-center gap-3 p-3 hover:bg-gray-50 transition-colors">
-                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${p.type === 'Lead' ? 'bg-pink-100' : p.type === 'Sinistre' ? 'bg-blue-100' : 'bg-green-100'}`}>
-                          <span className="text-lg">{p.type === 'Lead' ? '🩷' : p.type === 'Sinistre' ? '🔵' : '🟢'}</span>
+                    {dossierOverview.projects.active.map(p => {
+                      const projectTasks = (dossierOverview.tasks?.pending || []).filter(t => t.projectId === p.id);
+                      const daysSinceCreation = p.createdAt ? Math.floor((Date.now() - new Date(p.createdAt).getTime()) / (1000 * 60 * 60 * 24)) : null;
+                      return (
+                        <div key={p.id} className="bg-white">
+                          <a href={p.url} target="_blank" rel="noopener" className="flex items-center gap-3 p-3 hover:bg-gray-50 transition-colors">
+                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${p.type === 'Lead' ? 'bg-pink-100' : p.type === 'Sinistre' ? 'bg-blue-100' : 'bg-green-100'}`}>
+                              <span className="text-lg">{p.type === 'Lead' ? '🩷' : p.type === 'Sinistre' ? '🔵' : '🟢'}</span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-sm text-gray-900 truncate">{p.name}</p>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-xs text-gray-500">{p.type}</span>
+                                {p.niveau && <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{p.niveau}</span>}
+                                {daysSinceCreation !== null && <span className="text-xs text-gray-400">· {daysSinceCreation}j</span>}
+                              </div>
+                            </div>
+                            {p.priority && <span className={`text-xs px-2 py-1 rounded-full ${p.priority.includes('Urg') ? 'bg-red-100 text-red-700' : p.priority === 'Important' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-600'}`}>{p.priority}</span>}
+                            {projectTasks.length > 0 && <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{projectTasks.length}</span>}
+                            <Icon name="chevron" className="w-4 h-4 text-gray-400" />
+                          </a>
+                          {/* Tasks under project */}
+                          {projectTasks.length > 0 && (
+                            <div className="ml-6 border-l-2 border-gray-100 pl-4 pb-2">
+                              {projectTasks.map(t => (
+                                <a key={t.id} href={t.url} target="_blank" rel="noopener" className="flex items-center gap-2 py-1.5 px-2 hover:bg-gray-50 rounded-lg transition-colors">
+                                  <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : t.priority === 'Urgent' ? '🟡' : '⬜'}</span>
+                                  <span className="text-xs text-gray-700 flex-1 truncate">{t.name}</span>
+                                  {t.status && <span className="text-xs text-gray-400">{t.status}</span>}
+                                  {t.date && <span className="text-xs text-gray-400">{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
+                                </a>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm text-gray-900 truncate">{p.name}</p>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-xs text-gray-500">{p.type}</span>
-                            {p.niveau && <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{p.niveau}</span>}
-                          </div>
-                        </div>
-                        {p.priority && <span className={`text-xs px-2 py-1 rounded-full ${p.priority.includes('Urg') ? 'bg-red-100 text-red-700' : p.priority === 'Important' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-600'}`}>{p.priority}</span>}
-                        <Icon name="chevron" className="w-4 h-4 text-gray-400" />
-                      </a>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
 
-              {/* Tasks Section */}
-              {(dossierOverview.tasks?.pending?.length > 0) && (
+              {/* Tasks without project */}
+              {(dossierOverview.tasks?.pending?.filter(t => !t.projectId || !dossierOverview.projects?.active?.some(p => p.id === t.projectId))?.length > 0) && (
                 <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                   <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-                    <h4 className="font-semibold text-gray-900 flex items-center gap-2"><Icon name="tasks" className="w-4 h-4 text-blue-500" /> Tâches à faire</h4>
-                    <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{dossierOverview.tasks.pending.length}</span>
+                    <h4 className="font-semibold text-gray-900 flex items-center gap-2"><Icon name="tasks" className="w-4 h-4 text-blue-500" /> Autres tâches</h4>
+                    <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{dossierOverview.tasks.pending.filter(t => !t.projectId || !dossierOverview.projects?.active?.some(p => p.id === t.projectId)).length}</span>
                   </div>
                   <div className="divide-y divide-gray-50">
-                    {dossierOverview.tasks.pending.slice(0, 5).map(t => (
+                    {dossierOverview.tasks.pending.filter(t => !t.projectId || !dossierOverview.projects?.active?.some(p => p.id === t.projectId)).slice(0, 5).map(t => (
                       <a key={t.id} href={t.url} target="_blank" rel="noopener" className="flex items-center gap-3 p-3 hover:bg-gray-50 transition-colors">
                         <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${t.priority?.includes('Urg') ? 'bg-red-100' : t.priority === 'Important' ? 'bg-orange-100' : 'bg-gray-100'}`}>
                           <span className="text-sm">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : t.priority === 'Urgent' ? '🟡' : '⬜'}</span>
@@ -457,11 +478,6 @@ export default function WhatsAppAgent() {
                         <Icon name="chevron" className="w-4 h-4 text-gray-400" />
                       </a>
                     ))}
-                    {dossierOverview.tasks.pending.length > 5 && (
-                      <div className="p-3 text-center">
-                        <a href={dossierOverview.dossier?.url} target="_blank" rel="noopener" className="text-sm text-blue-600 hover:underline">Voir les {dossierOverview.tasks.pending.length - 5} autres tâches →</a>
-                      </div>
-                    )}
                   </div>
                 </div>
               )}

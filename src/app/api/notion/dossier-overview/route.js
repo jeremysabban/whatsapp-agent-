@@ -33,6 +33,7 @@ async function fetchProjects(dossierId) {
     niveau: p.properties['Niveau du Projet']?.status?.name || p.properties['Niveau du Projet']?.select?.name || '',
     priority: p.properties['Priorité']?.select?.name || '',
     done: p.properties['Terminé']?.checkbox || false,
+    createdAt: p.created_time,
     url: p.url,
   }));
 }
@@ -58,6 +59,7 @@ async function fetchTasks(dossierId) {
     status: t.properties['Statut']?.status?.name || t.properties['Statut']?.select?.name || '',
     priority: t.properties['Priorité']?.select?.name || '',
     date: t.properties['Date']?.date?.start || null,
+    projectId: t.properties['Projet']?.relation?.[0]?.id || null,
     url: t.url,
   }));
 }
