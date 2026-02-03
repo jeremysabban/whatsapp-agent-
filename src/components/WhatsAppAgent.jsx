@@ -7,6 +7,7 @@ const STATUSES = {
   client: { label: 'Client', color: 'bg-emerald-100 text-emerald-800 border-emerald-200', dot: 'bg-emerald-500', kanban: 'border-t-emerald-500' },
   assurance: { label: 'Assurance', color: 'bg-blue-100 text-blue-800 border-blue-200', dot: 'bg-blue-500', kanban: 'border-t-blue-500' },
   prospect: { label: 'Prospect', color: 'bg-purple-100 text-purple-800 border-purple-200', dot: 'bg-purple-500', kanban: 'border-t-purple-500' },
+  apporteur: { label: 'Apporteur', color: 'bg-amber-100 text-amber-800 border-amber-200', dot: 'bg-amber-500', kanban: 'border-t-amber-500' },
   hsva: { label: 'HSVA', color: 'bg-gray-100 text-gray-800 border-gray-200', dot: 'bg-gray-500', kanban: 'border-t-gray-500' },
 };
 const CATEGORIES = ['Gestion', 'Sinistre', 'Lead'];
@@ -103,7 +104,7 @@ export default function WhatsAppAgent() {
   const [previewDoc, setPreviewDoc] = useState(null);
   const [activeLabel, setActiveLabel] = useState('tous');
   const [activeTimePeriod, setActiveTimePeriod] = useState(null);
-  const [labelStats, setLabelStats] = useState({ client: 0, assurance: 0, prospect: 0 });
+  const [labelStats, setLabelStats] = useState({ client: 0, assurance: 0, prospect: 0, apporteur: 0 });
   const [allLabels, setAllLabels] = useState([]);
   const [agentLogs, setAgentLogs] = useState([]);
   const [agentLogTotal, setAgentLogTotal] = useState(0);
@@ -125,6 +126,11 @@ export default function WhatsAppAgent() {
   const [tagProjectModal, setTagProjectModal] = useState(null); // { tag: 'Gestion' | 'Sinistre' | 'Lead', jid: string }
   const [notionAnalytics, setNotionAnalytics] = useState(null);
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+  const [showReminderModal, setShowReminderModal] = useState(false);
+  const [reminderDate, setReminderDate] = useState('');
+  const [reminderTime, setReminderTime] = useState('09:00');
+  const [reminderNote, setReminderNote] = useState('');
+  const [upcomingReminders, setUpcomingReminders] = useState([]);
   const eventSourceRef = useRef(null);
   const messagesEndRef = useRef(null);
   const messageInputRef = useRef(null);
@@ -198,6 +204,25 @@ export default function WhatsAppAgent() {
   const loadStarredConvs = useCallback(async () => {
     try { const d = await api('conversations?starred=1'); setStarredConvs(d.conversations?.filter(c => c.starred) || []); } catch { setStarredConvs([]); }
   }, []);
+  const loadReminders = useCallback(async () => {
+    try { const d = await api('reminders'); setUpcomingReminders(d.reminders || []); } catch { setUpcomingReminders([]); }
+  }, []);
+  const saveReminder = async (jid) => {
+    if (!reminderDate) return;
+    const dateTime = new Date(`${reminderDate}T${reminderTime}`);
+    await api('update-status', 'POST', { jid, reminder_at: dateTime.getTime(), reminder_note: reminderNote || null });
+    setShowReminderModal(false);
+    setReminderDate('');
+    setReminderTime('09:00');
+    setReminderNote('');
+    loadConversations();
+    loadReminders();
+  };
+  const clearReminderFor = async (jid) => {
+    await api('update-status', 'POST', { jid, reminder_at: null });
+    loadConversations();
+    loadReminders();
+  };
   const toggleStar = async (jid, currentStarred) => {
     await api('update-status', 'POST', { jid, starred: !currentStarred });
     loadConversations();
@@ -207,7 +232,7 @@ export default function WhatsAppAgent() {
 
   // ==================== SSE ====================
   useEffect(() => {
-    checkStatus(); loadConversations(); loadDocuments(); loadStarredConvs(); loadAllTasks();
+    checkStatus(); loadConversations(); loadDocuments(); loadStarredConvs(); loadAllTasks(); loadReminders();
     const es = new EventSource('/api/whatsapp/events'); eventSourceRef.current = es;
     es.onmessage = (event) => { try { const d = JSON.parse(event.data);
       if (d.type === 'status') { setConnected(d.data.status === 'connected'); setConnecting(d.data.status === 'connecting'); if (d.data.status === 'connected') { setQrImage(null); loadConversations(); } }
@@ -226,12 +251,14 @@ export default function WhatsAppAgent() {
       const isInitialLoad = lastMessageCountRef.current === 0;
       const isNewMessage = selectedMessages.length > lastMessageCountRef.current;
       lastMessageCountRef.current = selectedMessages.length;
-      // Instant scroll on initial load, smooth for new messages
-      if (isInitialLoad) {
-        messagesEndRef.current?.scrollIntoView();
-      } else if (isNewMessage) {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }
+      // Wait for DOM to render before scrolling
+      setTimeout(() => {
+        if (isInitialLoad) {
+          messagesEndRef.current?.scrollIntoView();
+        } else if (isNewMessage) {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, 50);
     }
   }, [selectedMessages]);
   useEffect(() => { loadConversations(activeLabel, activeTimePeriod); }, [activeLabel, activeTimePeriod]);
@@ -326,7 +353,7 @@ export default function WhatsAppAgent() {
 
   // ==================== DASHBOARD ====================
   const Dashboard = () => {
-    const statusCounts = { client: conversations.filter(c => c.status === 'client').length, assurance: conversations.filter(c => c.status === 'assurance').length, prospect: conversations.filter(c => c.status === 'prospect').length };
+    const statusCounts = { client: conversations.filter(c => c.status === 'client').length, assurance: conversations.filter(c => c.status === 'assurance').length, prospect: conversations.filter(c => c.status === 'prospect').length, apporteur: conversations.filter(c => c.status === 'apporteur').length };
     const [taskTab, setTaskTab] = useState('faire');
     const [updatingTask, setUpdatingTask] = useState(null);
 
@@ -390,9 +417,41 @@ export default function WhatsAppAgent() {
           {[{ label:'Client', val: statusCounts.client, bg:'bg-emerald-50', color:'text-emerald-700', border:'border-emerald-200', click:()=>{setActiveLabel('client');setView('conversations');} },
             { label:'Assurance', val: statusCounts.assurance, bg:'bg-blue-50', color:'text-blue-700', border:'border-blue-200', click:()=>{setActiveLabel('assurance');setView('conversations');} },
             { label:'Prospect', val: statusCounts.prospect, bg:'bg-purple-50', color:'text-purple-700', border:'border-purple-200', click:()=>{setActiveLabel('prospect');setView('conversations');} },
-            { label:'Tâches', val: allTasks.filter(t => !t.completed).length, bg:'bg-amber-50', color:'text-amber-700', border:'border-amber-200', click:()=>{} }
+            { label:'Apporteur', val: statusCounts.apporteur, bg:'bg-amber-50', color:'text-amber-700', border:'border-amber-200', click:()=>{setActiveLabel('apporteur');setView('conversations');} },
+            { label:'Tâches', val: allTasks.filter(t => !t.completed).length, bg:'bg-orange-50', color:'text-orange-700', border:'border-orange-200', click:()=>{} }
           ].map(s => (<div key={s.label} onClick={s.click} className={`bg-white rounded-xl border ${s.border} p-4 cursor-pointer hover:shadow-sm`}><div className="flex items-center gap-3"><div className={`w-10 h-10 rounded-lg ${s.bg} flex items-center justify-center`}><span className={`font-bold text-sm ${s.color}`}>{s.label[0]}</span></div><div><p className={`text-2xl font-bold ${s.color}`}>{s.val}</p><p className="text-xs text-gray-500">{s.label}</p></div></div></div>))}
         </div>
+
+        {/* Reminders section */}
+        {upcomingReminders.length > 0 && (
+          <div className="space-y-3">
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+              <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+              Rappels ({upcomingReminders.length})
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {upcomingReminders.slice(0, 6).map(c => {
+                const isPast = c.reminder_at && c.reminder_at < Date.now();
+                const isToday = c.reminder_at && new Date(c.reminder_at).toDateString() === new Date().toDateString();
+                return (
+                  <button key={c.jid} onClick={() => openConversation(c)} className={`bg-white rounded-xl border p-4 hover:shadow-md transition-shadow text-left ${isPast ? 'border-red-300 bg-red-50' : isToday ? 'border-orange-300 bg-orange-50' : 'border-blue-200'}`}>
+                    <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-full ${c.avatar_color} flex items-center justify-center text-white text-sm font-bold`}>{c.display_initials}</div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-gray-900 truncate text-sm">{c.display_name}</p>
+                        <p className={`text-xs ${isPast ? 'text-red-600 font-semibold' : isToday ? 'text-orange-600 font-semibold' : 'text-blue-600'}`}>
+                          {isPast ? '⚠️ ' : isToday ? '📌 ' : '🔔 '}
+                          {new Date(c.reminder_at).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })} à {new Date(c.reminder_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
+                    </div>
+                    {c.reminder_note && <p className="text-xs text-gray-500 mt-2 truncate">{c.reminder_note}</p>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Section 1: Starred contacts */}
         {starredConvs.length > 0 && (
@@ -503,6 +562,7 @@ export default function WhatsAppAgent() {
       client: conversations.filter(c => c.status === 'client').length,
       assurance: conversations.filter(c => c.status === 'assurance').length,
       prospect: conversations.filter(c => c.status === 'prospect').length,
+      apporteur: conversations.filter(c => c.status === 'apporteur').length,
       hsva: conversations.filter(c => c.status === 'hsva').length,
     };
     const svaConvs = conversations.filter(c => c.status !== 'hsva');
@@ -512,11 +572,12 @@ export default function WhatsAppAgent() {
       else if (activeLabel === 'client') base = conversations.filter(c => c.status === 'client');
       else if (activeLabel === 'assurance') base = conversations.filter(c => c.status === 'assurance');
       else if (activeLabel === 'prospect') base = conversations.filter(c => c.status === 'prospect');
+      else if (activeLabel === 'apporteur') base = conversations.filter(c => c.status === 'apporteur');
       else if (activeLabel === 'hsva') base = conversations.filter(c => c.status === 'hsva');
       return base.filter(c => getName(c).toLowerCase().includes(searchQuery.toLowerCase()) || (c.last_message||'').toLowerCase().includes(searchQuery.toLowerCase()));
     };
     const filtered = getFiltered();
-    const tabs = [{ id:'tous', label:'Tous', count:svaConvs.length, activeBg:'bg-gray-900 text-white' }, { id:'client', label:'Client', count:statusCounts.client, activeBg:'bg-emerald-600 text-white' }, { id:'assurance', label:'Assurance', count:statusCounts.assurance, activeBg:'bg-blue-600 text-white' }, { id:'prospect', label:'Prospect', count:statusCounts.prospect, activeBg:'bg-purple-600 text-white' }, { id:'hsva', label:'HSVA', count:statusCounts.hsva, activeBg:'bg-orange-500 text-white' }];
+    const tabs = [{ id:'tous', label:'Tous', count:svaConvs.length, activeBg:'bg-gray-900 text-white' }, { id:'client', label:'Client', count:statusCounts.client, activeBg:'bg-emerald-600 text-white' }, { id:'assurance', label:'Assurance', count:statusCounts.assurance, activeBg:'bg-blue-600 text-white' }, { id:'prospect', label:'Prospect', count:statusCounts.prospect, activeBg:'bg-purple-600 text-white' }, { id:'apporteur', label:'Apporteur', count:statusCounts.apporteur, activeBg:'bg-amber-600 text-white' }, { id:'hsva', label:'HSVA', count:statusCounts.hsva, activeBg:'bg-gray-500 text-white' }];
     return (<div className="space-y-4">
       <div><h2 className="text-2xl font-bold text-gray-900">Conversations</h2><p className="text-gray-500 text-sm mt-1">Filtrées par statut</p></div>
       <div className="flex gap-2 flex-wrap">{tabs.map(tab => (<button key={tab.id} onClick={() => setActiveLabel(tab.id)} className={`px-4 py-2 rounded-xl text-sm font-semibold transition-colors ${activeLabel === tab.id ? tab.activeBg : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'}`}>{tab.label} <span className={`ml-1 ${activeLabel===tab.id?'opacity-80':'opacity-60'}`}>({tab.count})</span></button>))}</div>
@@ -569,6 +630,11 @@ export default function WhatsAppAgent() {
           {/* Star button */}
           <button onClick={() => toggleStar(c.jid, c.starred)} className={`p-2 rounded-lg transition-colors ${c.starred ? 'bg-amber-100 text-amber-500' : 'hover:bg-gray-100 text-gray-400'}`} title={c.starred ? 'Retirer des favoris' : 'Ajouter aux favoris'}>
             <svg className="w-5 h-5" fill={c.starred ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
+          </button>
+          {/* Reminder button */}
+          <button onClick={() => { setReminderDate(c.reminder_at ? new Date(c.reminder_at).toISOString().split('T')[0] : ''); setReminderTime(c.reminder_at ? new Date(c.reminder_at).toTimeString().slice(0,5) : '09:00'); setReminderNote(c.reminder_note || ''); setShowReminderModal(true); }} className={`p-2 rounded-lg transition-colors relative ${c.reminder_at ? 'bg-blue-100 text-blue-600' : 'hover:bg-gray-100 text-gray-400'}`} title={c.reminder_at ? `Rappel: ${new Date(c.reminder_at).toLocaleString('fr-FR')}` : 'Ajouter un rappel'}>
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+            {c.reminder_at && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-blue-500 rounded-full" />}
           </button>
           <select value={c.priority} onChange={e => updatePriority(c.jid, e.target.value)} className={`text-xs px-2 py-1 rounded border ${c.priority==='high'?'bg-red-100 text-red-700 border-red-200':c.priority==='medium'?'bg-amber-100 text-amber-700 border-amber-200':'bg-gray-100 text-gray-700 border-gray-200'}`}><option value="low">Basse</option><option value="medium">Moyenne</option><option value="high">Urgente</option></select>
           <select value={c.status} onChange={e => updateStatus(c.jid, e.target.value)} className={`text-xs px-3 py-1.5 rounded-full border font-medium ${STATUSES[c.status]?.color||''}`}>{Object.entries(STATUSES).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}</select>
@@ -1197,6 +1263,54 @@ export default function WhatsAppAgent() {
                 {(selectedConv.name_source === 'whatsapp' || !selectedConv.name_source) && <span className="text-green-500">✓</span>}
               </div>
             </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Reminder Modal */}
+    {showReminderModal && selectedConv && (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowReminderModal(false)}>
+        <div className="bg-white rounded-xl w-full max-w-sm p-4 space-y-4" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-gray-900">🔔 Rappel</h3>
+            <button onClick={() => setShowReminderModal(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+          </div>
+          <p className="text-sm text-gray-600">Définir un rappel pour <strong>{getName(selectedConv)}</strong></p>
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs font-medium text-gray-600">Date</label>
+              <input type="date" value={reminderDate} onChange={e => setReminderDate(e.target.value)} min={new Date().toISOString().split('T')[0]} className="w-full mt-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600">Heure</label>
+              <input type="time" value={reminderTime} onChange={e => setReminderTime(e.target.value)} className="w-full mt-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-gray-600">Note (optionnel)</label>
+              <input type="text" value={reminderNote} onChange={e => setReminderNote(e.target.value)} placeholder="Ex: Relancer pour le devis..." className="w-full mt-1 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            {selectedConv.reminder_at && (
+              <button onClick={() => { clearReminderFor(selectedConv.jid); setShowReminderModal(false); }} className="flex-1 py-2 bg-red-100 text-red-700 text-sm rounded-lg hover:bg-red-200 font-medium">Supprimer</button>
+            )}
+            <button onClick={() => saveReminder(selectedConv.jid)} disabled={!reminderDate} className="flex-1 py-2 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 disabled:opacity-50 font-medium">{selectedConv.reminder_at ? 'Modifier' : 'Définir'}</button>
+          </div>
+          {/* Quick options */}
+          <div className="pt-2 border-t border-gray-100">
+            <p className="text-xs text-gray-500 mb-2">Raccourcis :</p>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { label: 'Demain 9h', days: 1, time: '09:00' },
+                { label: 'Dans 3j', days: 3, time: '09:00' },
+                { label: 'Dans 1 sem', days: 7, time: '09:00' },
+                { label: 'Dans 2 sem', days: 14, time: '09:00' },
+              ].map(opt => {
+                const d = new Date(); d.setDate(d.getDate() + opt.days);
+                return <button key={opt.label} onClick={() => { setReminderDate(d.toISOString().split('T')[0]); setReminderTime(opt.time); }} className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded hover:bg-gray-200">{opt.label}</button>;
+              })}
+            </div>
           </div>
         </div>
       </div>

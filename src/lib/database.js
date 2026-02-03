@@ -83,6 +83,8 @@ function getDb() {
     addCol('conversations', 'notion_contact_name', 'TEXT DEFAULT NULL');
     addCol('conversations', 'notion_contact_url', 'TEXT DEFAULT NULL');
     addCol('conversations', 'name_source', "TEXT DEFAULT 'whatsapp'");
+    addCol('conversations', 'reminder_at', 'INTEGER DEFAULT NULL'); // Timestamp for reminder
+    addCol('conversations', 'reminder_note', 'TEXT DEFAULT NULL'); // Optional note for reminder
     // Migrate existing 'name' to 'whatsapp_name' if whatsapp_name is null
     _db.exec(`UPDATE conversations SET whatsapp_name = name WHERE whatsapp_name IS NULL AND name IS NOT NULL`);
     // Set name_source based on existing data
@@ -361,6 +363,41 @@ export function setEmail(jid, email) {
 export function setPhone(jid, phone) {
   getDb().prepare('UPDATE conversations SET phone=?, updated_at=? WHERE jid=?')
     .run(phone?.trim() || null, Date.now(), jid);
+}
+
+export function setReminder(jid, reminderAt, note = null) {
+  getDb().prepare('UPDATE conversations SET reminder_at=?, reminder_note=?, updated_at=? WHERE jid=?')
+    .run(reminderAt, note, Date.now(), jid);
+}
+
+export function clearReminder(jid) {
+  getDb().prepare('UPDATE conversations SET reminder_at=NULL, reminder_note=NULL, updated_at=? WHERE jid=?')
+    .run(Date.now(), jid);
+}
+
+export function getUpcomingReminders(limit = 50) {
+  const db = getDb();
+  const now = Date.now();
+  return db.prepare(`
+    SELECT c.*,
+      (SELECT COUNT(*) FROM documents d WHERE d.conversation_jid=c.jid) as document_count
+    FROM conversations c
+    WHERE c.reminder_at IS NOT NULL AND c.reminder_at > 0
+    ORDER BY c.reminder_at ASC
+    LIMIT ?
+  `).all(limit).map(r => enrichConversation(r));
+}
+
+export function getDueReminders() {
+  const db = getDb();
+  const now = Date.now();
+  return db.prepare(`
+    SELECT c.*,
+      (SELECT COUNT(*) FROM documents d WHERE d.conversation_jid=c.jid) as document_count
+    FROM conversations c
+    WHERE c.reminder_at IS NOT NULL AND c.reminder_at <= ?
+    ORDER BY c.reminder_at ASC
+  `).all(now).map(r => enrichConversation(r));
 }
 
 export function setNameSource(jid, source) {
