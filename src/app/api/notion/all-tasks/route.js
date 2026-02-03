@@ -1,24 +1,28 @@
 import { NextResponse } from 'next/server';
-import { NOTION_TASKS_DB_ID, NOTION_PROJECTS_DB_ID, NOTION_DOSSIERS_DB_ID, notionHeaders } from '@/lib/notion-config';
-import { getConversations } from '@/lib/database';
+import { NOTION_TASKS_DB_ID, notionHeaders } from '@/lib/notion-config';
+import { getConversations, getDisplayName } from '@/lib/database';
 
-async function fetchAllOpenTasks() {
+async function fetchTasks(completed = false) {
+  const filter = completed
+    ? { property: 'Statut', checkbox: { equals: true } }
+    : { property: 'Statut', checkbox: { equals: false } };
+
   const res = await fetch(`https://api.notion.com/v1/databases/${NOTION_TASKS_DB_ID}/query`, {
     method: 'POST',
     headers: notionHeaders(),
     body: JSON.stringify({
-      filter: {
-        and: [
-          { property: 'Statut', status: { does_not_equal: 'Terminé' } },
-          { property: 'Statut', status: { does_not_equal: 'Done' } },
-          { property: 'Statut', status: { does_not_equal: 'Fait' } },
-        ]
-      },
+      filter,
       sorts: [{ property: 'Date', direction: 'ascending' }],
       page_size: 100,
     }),
   });
-  if (!res.ok) return [];
+
+  if (!res.ok) {
+    const error = await res.json();
+    console.error('[Notion] Fetch tasks error:', error);
+    return [];
+  }
+
   const data = await res.json();
   return data.results;
 }
@@ -28,7 +32,6 @@ async function fetchPageTitle(pageId) {
     const res = await fetch(`https://api.notion.com/v1/pages/${pageId}`, { headers: notionHeaders() });
     if (!res.ok) return null;
     const page = await res.json();
-    // Try different title property names
     const props = page.properties;
     const title = props['Name']?.title?.[0]?.plain_text
       || props['Nom']?.title?.[0]?.plain_text
@@ -41,9 +44,31 @@ async function fetchPageTitle(pageId) {
   }
 }
 
-export async function GET() {
+function getEisenhowerQuadrant(priority) {
+  // Map priority status to Eisenhower quadrant
+  switch (priority) {
+    case 'Urg & Imp': return 'faire';      // 🔴 Urgent + Important
+    case 'Important': return 'planifier';   // 🟡 Important, not urgent
+    case 'Urgent': return 'deleguer';       // 🟠 Urgent, not important
+    case 'Secondaire': return 'eliminer';   // ⚪ Neither
+    case 'En attente': return 'attente';
+    case 'À prioriser': return 'aprioriser';
+    default: return 'aprioriser';
+  }
+}
+
+export async function GET(request) {
   try {
-    const tasksRaw = await fetchAllOpenTasks();
+    const { searchParams } = new URL(request.url);
+    const includeCompleted = searchParams.get('completed') === 'true';
+
+    // Fetch open tasks, and optionally completed tasks
+    const [openTasks, completedTasks] = await Promise.all([
+      fetchTasks(false),
+      includeCompleted ? fetchTasks(true) : Promise.resolve([]),
+    ]);
+
+    const tasksRaw = [...openTasks, ...completedTasks];
 
     // Get all conversations to match dossier IDs with contacts
     const conversations = getConversations({});
@@ -52,7 +77,7 @@ export async function GET() {
       if (conv.notion_dossier_id) {
         dossierToConversation[conv.notion_dossier_id] = {
           jid: conv.jid,
-          name: conv.name,
+          name: getDisplayName(conv), // Use display name hierarchy
           avatar_initials: conv.avatar_initials,
           avatar_color: conv.avatar_color,
         };
@@ -81,30 +106,61 @@ export async function GET() {
       const projectId = t.properties['Projet']?.relation?.[0]?.id;
       const dossierId = t.properties['💬 Dossiers']?.relation?.[0]?.id;
       const dueDate = t.properties['Date']?.date?.start || null;
+      const completed = t.properties['Statut']?.checkbox || false;
+      const priority = t.properties['Priorité']?.status?.name || 'À prioriser';
+      const quadrant = getEisenhowerQuadrant(priority);
 
       // Determine if overdue or due today
       let dateStatus = null;
-      if (dueDate) {
+      if (dueDate && !completed) {
         const today = new Date().toISOString().split('T')[0];
         if (dueDate < today) dateStatus = 'overdue';
         else if (dueDate === today) dateStatus = 'today';
       }
 
+      // Get last edited time for completed tasks
+      const completedAt = completed ? t.last_edited_time : null;
+
       return {
         id: t.id,
         name: t.properties['Tâche']?.title?.[0]?.plain_text || 'Sans nom',
-        status: t.properties['Statut']?.status?.name || t.properties['Statut']?.select?.name || '',
-        priority: t.properties['Priorité']?.select?.name || '',
+        completed,
+        priority,
+        quadrant,
         date: dueDate,
         dateStatus,
+        completedAt,
         url: t.url,
         project: projectId ? projectsMap[projectId] : null,
         dossier: dossierId ? dossiersMap[dossierId] : null,
+        dossierId,
         contact: dossierId ? dossierToConversation[dossierId] || null : null,
       };
     });
 
-    return NextResponse.json({ tasks });
+    // Filter completed tasks to last 7 days only
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const sevenDaysAgoStr = sevenDaysAgo.toISOString();
+
+    const filteredTasks = tasks.filter(t => {
+      if (!t.completed) return true;
+      return t.completedAt && t.completedAt >= sevenDaysAgoStr;
+    });
+
+    // Sort: open tasks by date, completed by completedAt desc
+    filteredTasks.sort((a, b) => {
+      if (a.completed !== b.completed) return a.completed ? 1 : -1;
+      if (a.completed) {
+        return (b.completedAt || '').localeCompare(a.completedAt || '');
+      }
+      if (!a.date && !b.date) return 0;
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return a.date.localeCompare(b.date);
+    });
+
+    return NextResponse.json({ tasks: filteredTasks });
   } catch (error) {
     console.error('All tasks error:', error);
     return NextResponse.json({ error: error.message, tasks: [] }, { status: 500 });

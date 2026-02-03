@@ -12,11 +12,11 @@ export async function POST(req) {
       'Name': { title: [{ text: { content: name } }] },
       'Terminé': { checkbox: false },
       'Type': { select: { name: type || 'Lead' } },
-      'Priorité': { select: { name: priority || 'À prioriser' } },
+      'Priorité': { status: { name: priority || 'À prioriser' } }, // status, not select
     };
 
     if (niveau) {
-      properties['Niveau du Projet'] = { status: { name: niveau } };
+      properties['Niveau du Projet'] = { select: { name: niveau } }; // select, not status
     }
 
     if (dossierId) {

@@ -123,24 +123,26 @@ export default function WhatsAppAgent() {
   const [loadingAllTasks, setLoadingAllTasks] = useState(false);
   const [starredConvs, setStarredConvs] = useState([]);
   const [tagProjectModal, setTagProjectModal] = useState(null); // { tag: 'Gestion' | 'Sinistre' | 'Lead', jid: string }
+  const [notionAnalytics, setNotionAnalytics] = useState(null);
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const eventSourceRef = useRef(null);
   const messagesEndRef = useRef(null);
   const messageInputRef = useRef(null);
+  const lastMessageCountRef = useRef(0); // Track message count for scroll behavior
 
   // ==================== DATA FETCHING ====================
   const loadConversations = useCallback(async (label, time) => {
     try {
-      const l = label !== undefined ? label : activeLabel;
       const t = time !== undefined ? time : activeTimePeriod;
       const params = new URLSearchParams();
-      if (l && l !== 'tous' && l !== 'HSVA') params.append('label', l);
+      // Don't filter by status on API - we filter client-side by the status field
       if (t) params.append('time', t);
       const data = await api(`conversations?${params}`);
       setConversations(data.conversations || []); setStats(data.stats || {});
       if (data.labelStats) setLabelStats(data.labelStats);
       if (data.allLabels) setAllLabels(data.allLabels);
     } catch (e) { console.error('Load error:', e); }
-  }, [activeLabel, activeTimePeriod]);
+  }, [activeTimePeriod]);
 
   const loadDocuments = useCallback(async () => { try { const d = await api('documents'); setDocuments(d.documents || []); } catch {} }, []);
   const loadMessages = useCallback(async (jid) => { try { const d = await api(`messages/${encodeURIComponent(jid)}`); setSelectedMessages(d.messages || []); setSelectedDocs(d.documents || []); setSelectedConv(d.conversation || null); } catch {} }, []);
@@ -185,8 +187,13 @@ export default function WhatsAppAgent() {
   }, []);
   const loadAllTasks = useCallback(async () => {
     setLoadingAllTasks(true);
-    try { const r = await fetch('/api/notion/all-tasks'); const d = await r.json(); setAllTasks(d.tasks || []); } catch { setAllTasks([]); }
+    try { const r = await fetch('/api/notion/all-tasks?completed=true'); const d = await r.json(); setAllTasks(d.tasks || []); } catch { setAllTasks([]); }
     setLoadingAllTasks(false);
+  }, []);
+  const loadNotionAnalytics = useCallback(async () => {
+    setLoadingAnalytics(true);
+    try { const r = await fetch('/api/notion/analytics'); const d = await r.json(); setNotionAnalytics(d); } catch { setNotionAnalytics(null); }
+    setLoadingAnalytics(false);
   }, []);
   const loadStarredConvs = useCallback(async () => {
     try { const d = await api('conversations?starred=1'); setStarredConvs(d.conversations?.filter(c => c.starred) || []); } catch { setStarredConvs([]); }
@@ -214,7 +221,19 @@ export default function WhatsAppAgent() {
     return () => { es.close(); clearInterval(iv); };
   }, []);
 
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [selectedMessages]);
+  useEffect(() => {
+    if (selectedMessages.length > 0) {
+      const isInitialLoad = lastMessageCountRef.current === 0;
+      const isNewMessage = selectedMessages.length > lastMessageCountRef.current;
+      lastMessageCountRef.current = selectedMessages.length;
+      // Instant scroll on initial load, smooth for new messages
+      if (isInitialLoad) {
+        messagesEndRef.current?.scrollIntoView();
+      } else if (isNewMessage) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
+  }, [selectedMessages]);
   useEffect(() => { loadConversations(activeLabel, activeTimePeriod); }, [activeLabel, activeTimePeriod]);
   useEffect(() => { if (view === 'journal') loadAgentLogs(); }, [view, logTypeFilter]);
 
@@ -222,7 +241,7 @@ export default function WhatsAppAgent() {
   const handleConnect = async () => { setConnecting(true); await api('connect', 'POST'); const iv = setInterval(async () => { const d = await api('qr'); if (d.qr) setQrImage(d.qr); if (d.status === 'connected' || d.status === 'disconnected') { clearInterval(iv); if (d.status === 'connected') { setConnected(true); setConnecting(false); setQrImage(null); } } }, 2000); };
   const fetchQR = async () => { const d = await api('qr'); if (d.qr) setQrImage(d.qr); };
   const handleDisconnect = async () => { await api('disconnect', 'POST'); setConnected(false); setConnecting(false); setQrImage(null); };
-  const openConversation = (conv) => { setSelectedJid(conv.jid); setView('detail'); loadMessages(conv.jid); setEditingName(false); setEditingEmail(false); if (conv.notion_dossier_id) { loadDossierDetails(conv.notion_dossier_id); loadDossierProjects(conv.notion_dossier_id); } else { setDossierDetails(null); setDossierProjects([]); } };
+  const openConversation = (conv) => { setSelectedJid(conv.jid); setView('detail'); lastMessageCountRef.current = 0; loadMessages(conv.jid); setEditingName(false); setEditingEmail(false); if (conv.notion_dossier_id) { loadDossierDetails(conv.notion_dossier_id); loadDossierProjects(conv.notion_dossier_id); } else { setDossierDetails(null); setDossierProjects([]); } };
   const updateStatus = async (jid, s) => { await api('update-status', 'POST', { jid, status: s }); loadConversations(); if (selectedJid === jid) loadMessages(jid); };
   const updateCategory = async (jid, c) => { await api('update-status', 'POST', { jid, category: c }); loadConversations(); if (selectedJid === jid) loadMessages(jid); };
   const toggleTag = async (jid, tag, currentTags) => {
@@ -308,8 +327,51 @@ export default function WhatsAppAgent() {
   // ==================== DASHBOARD ====================
   const Dashboard = () => {
     const statusCounts = { client: conversations.filter(c => c.status === 'client').length, assurance: conversations.filter(c => c.status === 'assurance').length, prospect: conversations.filter(c => c.status === 'prospect').length };
-    const [taskFilter, setTaskFilter] = useState(null);
-    const filteredTasks = taskFilter ? allTasks.filter(t => t.status === taskFilter) : allTasks;
+    const [taskTab, setTaskTab] = useState('faire');
+    const [updatingTask, setUpdatingTask] = useState(null);
+
+    // Eisenhower quadrants based on priority status
+    const EISENHOWER_TABS = [
+      { id: 'faire', label: '🔴 Faire', color: 'bg-red-100 text-red-700', border: 'border-red-200', priorities: ['Urg & Imp'] },
+      { id: 'planifier', label: '🟡 Planifier', color: 'bg-yellow-100 text-yellow-700', border: 'border-yellow-200', priorities: ['Important'] },
+      { id: 'deleguer', label: '🟠 Déléguer', color: 'bg-orange-100 text-orange-700', border: 'border-orange-200', priorities: ['Urgent'] },
+      { id: 'eliminer', label: '⚪ Éliminer', color: 'bg-gray-100 text-gray-600', border: 'border-gray-200', priorities: ['Secondaire', 'En attente', 'À prioriser'] },
+      { id: 'terminees', label: '✅ Terminées', color: 'bg-emerald-100 text-emerald-700', border: 'border-emerald-200', priorities: [] },
+    ];
+
+    const getTasksForTab = (tabId) => {
+      if (tabId === 'terminees') return allTasks.filter(t => t.completed);
+      const tab = EISENHOWER_TABS.find(t => t.id === tabId);
+      if (!tab) return [];
+      return allTasks.filter(t => !t.completed && tab.priorities.includes(t.priority));
+    };
+
+    const filteredTasks = getTasksForTab(taskTab);
+    const currentTab = EISENHOWER_TABS.find(t => t.id === taskTab);
+
+    // Update task in Notion
+    const updateTask = async (task, updates) => {
+      setUpdatingTask(task.id);
+      try {
+        await fetch('/api/notion/update-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taskId: task.id, updates, dossierId: task.dossierId, taskName: task.name }),
+        });
+        loadAllTasks(); // Refresh
+      } catch (e) { console.error('Update task error:', e); }
+      setUpdatingTask(null);
+    };
+
+    // Navigate to conversation linked to task's dossier
+    const navigateToTaskConversation = (task) => {
+      if (task.contact?.jid) {
+        const conv = conversations.find(c => c.jid === task.contact.jid);
+        if (conv) { openConversation(conv); return; }
+      }
+      // Fallback: open in Notion
+      if (task.url) window.open(task.url, '_blank');
+    };
 
     return (
       <div className="space-y-6">
@@ -328,7 +390,7 @@ export default function WhatsAppAgent() {
           {[{ label:'Client', val: statusCounts.client, bg:'bg-emerald-50', color:'text-emerald-700', border:'border-emerald-200', click:()=>{setActiveLabel('client');setView('conversations');} },
             { label:'Assurance', val: statusCounts.assurance, bg:'bg-blue-50', color:'text-blue-700', border:'border-blue-200', click:()=>{setActiveLabel('assurance');setView('conversations');} },
             { label:'Prospect', val: statusCounts.prospect, bg:'bg-purple-50', color:'text-purple-700', border:'border-purple-200', click:()=>{setActiveLabel('prospect');setView('conversations');} },
-            { label:'Tâches', val: allTasks.length, bg:'bg-amber-50', color:'text-amber-700', border:'border-amber-200', click:()=>{} }
+            { label:'Tâches', val: allTasks.filter(t => !t.completed).length, bg:'bg-amber-50', color:'text-amber-700', border:'border-amber-200', click:()=>{} }
           ].map(s => (<div key={s.label} onClick={s.click} className={`bg-white rounded-xl border ${s.border} p-4 cursor-pointer hover:shadow-sm`}><div className="flex items-center gap-3"><div className={`w-10 h-10 rounded-lg ${s.bg} flex items-center justify-center`}><span className={`font-bold text-sm ${s.color}`}>{s.label[0]}</span></div><div><p className={`text-2xl font-bold ${s.color}`}>{s.val}</p><p className="text-xs text-gray-500">{s.label}</p></div></div></div>))}
         </div>
 
@@ -354,74 +416,67 @@ export default function WhatsAppAgent() {
           </div>
         )}
 
-        {/* Section 2: All Tasks Table */}
+        {/* Section 2: Tasks with Eisenhower Tabs */}
         <div className="bg-white rounded-xl border border-gray-200">
           <div className="p-4 border-b border-gray-100 flex items-center justify-between">
             <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Icon name="tasks" className="w-5 h-5 text-blue-500" /> Tâches Notion</h3>
-            <button onClick={loadAllTasks} disabled={loadingAllTasks} className="text-blue-600 text-sm hover:underline">{loadingAllTasks ? 'Chargement...' : 'Actualiser'}</button>
+            <button onClick={loadAllTasks} disabled={loadingAllTasks} className="text-blue-600 text-sm hover:underline flex items-center gap-1">
+              {loadingAllTasks && <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500" />}
+              {loadingAllTasks ? 'Chargement...' : '↻ Actualiser'}
+            </button>
           </div>
-          {/* Filter tabs */}
+          {/* Eisenhower tabs */}
           <div className="flex gap-2 p-3 border-b border-gray-100 overflow-x-auto">
-            {[{id:null,label:'Toutes'},{id:'À faire',label:'À faire'},{id:'En cours',label:'En cours'},{id:'En attente',label:'En attente'}].map(f => (
-              <button key={f.id||'all'} onClick={() => setTaskFilter(f.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap ${taskFilter === f.id ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>{f.label}</button>
-            ))}
+            {EISENHOWER_TABS.map(tab => {
+              const count = getTasksForTab(tab.id).length;
+              return (
+                <button key={tab.id} onClick={() => setTaskTab(tab.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap flex items-center gap-1.5 ${taskTab === tab.id ? tab.color + ' ' + tab.border + ' border' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
+                  {tab.label} <span className="opacity-70">({count})</span>
+                </button>
+              );
+            })}
           </div>
           {loadingAllTasks ? (
             <div className="p-8 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto" /></div>
           ) : filteredTasks.length === 0 ? (
-            <div className="p-8 text-center text-gray-400 text-sm">Aucune tâche</div>
+            <div className="p-8 text-center text-gray-400 text-sm">Aucune tâche dans cette catégorie</div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="text-left px-4 py-3 font-medium text-gray-600">Tâche</th>
-                    <th className="text-left px-4 py-3 font-medium text-gray-600">Contact</th>
-                    <th className="text-left px-4 py-3 font-medium text-gray-600">Dossier</th>
-                    <th className="text-left px-4 py-3 font-medium text-gray-600">Projet</th>
-                    <th className="text-left px-4 py-3 font-medium text-gray-600">Statut</th>
-                    <th className="text-left px-4 py-3 font-medium text-gray-600">Échéance</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {filteredTasks.slice(0, 20).map(t => (
-                    <tr key={t.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3">
-                        <a href={t.url} target="_blank" rel="noopener" className="text-gray-900 hover:text-blue-600 hover:underline font-medium">{t.name}</a>
-                      </td>
-                      <td className="px-4 py-3">
-                        {t.contact ? (
-                          <button onClick={() => { const c = conversations.find(cv => cv.jid === t.contact.jid); if (c) openConversation(c); }} className="flex items-center gap-2 hover:underline">
-                            <div className={`w-6 h-6 rounded-full ${t.contact.avatar_color} flex items-center justify-center text-white text-xs font-bold`}>{t.contact.avatar_initials}</div>
-                            <span className="text-gray-700">{t.contact.name}</span>
-                          </button>
-                        ) : <span className="text-gray-400">—</span>}
-                      </td>
-                      <td className="px-4 py-3">
-                        {t.dossier ? (
-                          <a href={t.dossier.url} target="_blank" rel="noopener" className="text-gray-600 hover:text-blue-600 hover:underline">{t.dossier.name}</a>
-                        ) : <span className="text-gray-400">—</span>}
-                      </td>
-                      <td className="px-4 py-3">
-                        {t.project ? (
-                          <a href={t.project.url} target="_blank" rel="noopener" className="text-gray-600 hover:text-blue-600 hover:underline">{t.project.name}</a>
-                        ) : <span className="text-gray-400">—</span>}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`text-xs px-2 py-1 rounded-full ${t.status === 'En cours' ? 'bg-blue-100 text-blue-700' : t.status === 'À faire' ? 'bg-gray-100 text-gray-700' : 'bg-amber-100 text-amber-700'}`}>{t.status || '—'}</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        {t.date ? (
-                          <span className={`text-xs ${t.dateStatus === 'overdue' ? 'text-red-600 font-medium' : t.dateStatus === 'today' ? 'text-orange-600 font-medium' : 'text-gray-500'}`}>
-                            {new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}
-                          </span>
-                        ) : <span className="text-gray-400">—</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {filteredTasks.length > 20 && <div className="p-3 text-center text-xs text-gray-400">+{filteredTasks.length - 20} autres tâches</div>}
+            <div className="divide-y divide-gray-50">
+              {filteredTasks.slice(0, 30).map(t => (
+                <div key={t.id} className={`flex items-center gap-3 px-4 py-3 hover:bg-gray-50 ${updatingTask === t.id ? 'opacity-50' : ''}`}>
+                  {/* Checkbox */}
+                  <button onClick={() => updateTask(t, { completed: !t.completed })} disabled={updatingTask === t.id} className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${t.completed ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-gray-300 hover:border-emerald-400'}`}>
+                    {t.completed && <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
+                  </button>
+                  {/* Task name - click to navigate */}
+                  <button onClick={() => navigateToTaskConversation(t)} className={`flex-1 text-left min-w-0 ${t.completed ? 'line-through text-gray-400' : 'text-gray-900'}`}>
+                    <span className="font-medium hover:text-blue-600 truncate block">{t.name}</span>
+                    <span className="text-xs text-gray-500 truncate block">
+                      {t.contact?.name || t.dossier?.name || ''}
+                      {t.project && <span className="text-gray-400"> · {t.project.name}</span>}
+                    </span>
+                  </button>
+                  {/* Priority selector (only for non-completed) */}
+                  {!t.completed && (
+                    <select value={t.priority} onChange={e => updateTask(t, { priority: e.target.value })} disabled={updatingTask === t.id} className="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1 cursor-pointer hover:bg-gray-100">
+                      <option value="Urg & Imp">🔴 Urg & Imp</option>
+                      <option value="Important">🟡 Important</option>
+                      <option value="Urgent">🟠 Urgent</option>
+                      <option value="Secondaire">⚪ Secondaire</option>
+                      <option value="À prioriser">📋 À prioriser</option>
+                    </select>
+                  )}
+                  {/* Due date */}
+                  {t.date ? (
+                    <span className={`text-xs flex-shrink-0 ${t.dateStatus === 'overdue' ? 'text-red-600 font-semibold' : t.dateStatus === 'today' ? 'text-orange-600 font-semibold' : 'text-gray-500'}`}>
+                      {t.dateStatus === 'overdue' && '⚠️ '}{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}
+                    </span>
+                  ) : t.completed && t.completedAt ? (
+                    <span className="text-xs text-gray-400">✓ {new Date(t.completedAt).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>
+                  ) : null}
+                </div>
+              ))}
+              {filteredTasks.length > 30 && <div className="p-3 text-center text-xs text-gray-400">+{filteredTasks.length - 30} autres tâches</div>}
             </div>
           )}
         </div>
@@ -568,7 +623,7 @@ export default function WhatsAppAgent() {
                         <div className="flex-1 min-w-0"><p className="text-xs font-medium truncate text-gray-900">{msg.text?.replace('📎 ','')||'Document'}</p><p className="text-xs text-gray-400">Cliquer pour voir</p></div>
                       </button>
                     )}
-                    {!msg.media_url && msg.is_document && (
+                    {!msg.media_url && !!msg.is_document && (
                       <div className="flex items-center gap-2 p-2 rounded-lg bg-gray-50 border border-gray-200">
                         <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-red-100"><span className="text-xs font-bold text-red-500">PDF</span></div>
                         <div className="flex-1 min-w-0"><p className="text-xs font-medium truncate text-gray-900">{msg.text?.replace('📎 ','')||'Document'}</p><p className="text-xs text-gray-400">En attente...</p></div>
@@ -577,7 +632,7 @@ export default function WhatsAppAgent() {
                     {!msg.is_document && msg.text && <p className="whitespace-pre-wrap">{msg.text}</p>}
                     <div className="flex items-center justify-end gap-1 mt-1">
                       <span className="text-[10px] text-gray-500">{new Date(msg.timestamp).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</span>
-                      {msg.from_me && <svg className="w-4 h-4 text-blue-500" viewBox="0 0 16 15" fill="currentColor"><path d="M15.01 3.316l-.478-.372a.365.365 0 0 0-.51.063L8.666 9.88a.32.32 0 0 1-.484.032l-.358-.325a.32.32 0 0 0-.484.032l-.378.48a.418.418 0 0 0 .036.54l1.32 1.267a.32.32 0 0 0 .484-.034l6.272-8.048a.366.366 0 0 0-.064-.512zm-4.1 0l-.478-.372a.365.365 0 0 0-.51.063L4.566 9.88a.32.32 0 0 1-.484.032L1.892 7.77a.366.366 0 0 0-.516.005l-.423.433a.364.364 0 0 0 .006.514l3.255 3.185a.32.32 0 0 0 .484-.033l6.272-8.048a.365.365 0 0 0-.063-.51z"/></svg>}
+                      {!!msg.from_me && <svg className="w-4 h-4 text-blue-500" viewBox="0 0 16 15" fill="currentColor"><path d="M15.01 3.316l-.478-.372a.365.365 0 0 0-.51.063L8.666 9.88a.32.32 0 0 1-.484.032l-.358-.325a.32.32 0 0 0-.484.032l-.378.48a.418.418 0 0 0 .036.54l1.32 1.267a.32.32 0 0 0 .484-.034l6.272-8.048a.366.366 0 0 0-.064-.512zm-4.1 0l-.478-.372a.365.365 0 0 0-.51.063L4.566 9.88a.32.32 0 0 1-.484.032L1.892 7.77a.366.366 0 0 0-.516.005l-.423.433a.364.364 0 0 0 .006.514l3.255 3.185a.32.32 0 0 0 .484-.033l6.272-8.048a.365.365 0 0 0-.063-.51z"/></svg>}
                     </div>
                   </div>
                 </div>

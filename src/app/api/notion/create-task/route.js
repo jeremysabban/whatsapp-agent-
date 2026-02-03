@@ -10,8 +10,8 @@ export async function POST(req) {
 
     const properties = {
       'Tâche': { title: [{ text: { content: name } }] },
-      'Statut': { status: { name: 'À faire' } },
-      'Priorité': { select: { name: priority || 'À prioriser' } },
+      'Statut': { checkbox: false }, // checkbox, not status
+      'Priorité': { status: { name: priority || 'À prioriser' } }, // status, not select
     };
 
     if (date) {
