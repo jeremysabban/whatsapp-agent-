@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { NOTION_TASKS_DB_ID, NOTION_PROJECTS_DB_ID, notionHeaders } from '@/lib/notion-config';
+import { NOTION_TASKS_DB_ID, NOTION_PROJECTS_DB_ID, NOTION_CONTRACTS_DB_ID, notionHeaders } from '@/lib/notion-config';
+import { getNotionCache, setNotionCache } from '@/lib/database';
 
 const CONTACTS_DB_ID = 'c812f778-cd65-413f-8feb-5cbc4fbb5dd8';
 
@@ -78,75 +79,129 @@ async function fetchContacts(dossierId) {
   }));
 }
 
+async function fetchContracts(dossierId, projects) {
+  if (!NOTION_CONTRACTS_DB_ID) return [];
+  const res = await fetch(`https://api.notion.com/v1/databases/${NOTION_CONTRACTS_DB_ID}/query`, {
+    method: 'POST',
+    headers: notionHeaders(),
+    body: JSON.stringify({
+      filter: { property: '💬 Dossiers', relation: { contains: dossierId } },
+    }),
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+
+  const projectTypeMap = {};
+  for (const p of projects) {
+    projectTypeMap[p.id] = p.type;
+  }
+
+  return data.results.map(c => {
+    const projectId = c.properties['Projet']?.relation?.[0]?.id || null;
+    const projectType = projectId ? projectTypeMap[projectId] || null : null;
+    return {
+      id: c.id,
+      name: c.properties['Name']?.title?.[0]?.plain_text || c.properties['Nom']?.title?.[0]?.plain_text || 'Sans nom',
+      compagnie: c.properties['Compagnie']?.select?.name || c.properties['Compagnie']?.relation?.[0]?.id || '',
+      productType: c.properties['Type de produit']?.select?.name || c.properties['Produit']?.select?.name || '',
+      status: c.properties['Statut']?.status?.name || c.properties['Statut']?.select?.name || '',
+      projectId,
+      projectType,
+      url: c.url,
+    };
+  });
+}
+
+async function fetchAndBuildResponse(dossierId) {
+  const dossier = await fetchPage(dossierId);
+  if (!dossier) return null;
+
+  const props = dossier.properties;
+  const dossierInfo = {
+    id: dossier.id,
+    name: props['Nom du dossier']?.title?.[0]?.plain_text || 'Sans nom',
+    driveUrl: props['Google drive']?.url || null,
+    category: props['Cat Client']?.select?.name || '',
+    createdAt: dossier.created_time,
+    url: dossier.url,
+  };
+
+  const [projects, tasks, contacts] = await Promise.all([
+    fetchProjects(dossierId),
+    fetchTasks(dossierId),
+    fetchContacts(dossierId),
+  ]);
+
+  const contracts = await fetchContracts(dossierId, projects);
+
+  const activeProjects = projects.filter(p => !p.done);
+  const doneProjects = projects.filter(p => p.done);
+
+  const tasksByProject = {};
+  const orphanTasks = [];
+
+  for (const task of tasks) {
+    if (task.projectId) {
+      if (!tasksByProject[task.projectId]) tasksByProject[task.projectId] = [];
+      tasksByProject[task.projectId].push(task);
+    } else {
+      orphanTasks.push(task);
+    }
+  }
+
+  const projectsWithTasks = activeProjects.map(p => ({
+    ...p,
+    tasks: tasksByProject[p.id] || [],
+  }));
+
+  const stats = {
+    activeProjects: activeProjects.length,
+    doneProjects: doneProjects.length,
+    pendingTasks: tasks.filter(t => !['Terminé', 'Done', 'Fait'].includes(t.status)).length,
+    contacts: contacts.length,
+    contracts: contracts.length,
+  };
+
+  return {
+    dossier: dossierInfo,
+    contracts,
+    projects: projectsWithTasks,
+    doneProjects,
+    orphanTasks,
+    contacts,
+    stats,
+  };
+}
+
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
     const dossierId = searchParams.get('dossierId');
+    const cached = searchParams.get('cached') === 'true';
+    const refresh = searchParams.get('refresh') === 'true';
 
     if (!dossierId) {
       return NextResponse.json({ error: 'dossierId required' }, { status: 400 });
     }
 
-    const dossier = await fetchPage(dossierId);
-    if (!dossier) {
-      return NextResponse.json({ error: 'Dossier not found' }, { status: 404 });
-    }
-
-    const props = dossier.properties;
-    const dossierInfo = {
-      id: dossier.id,
-      name: props['Nom du dossier']?.title?.[0]?.plain_text || 'Sans nom',
-      driveUrl: props['Google drive']?.url || null,
-      category: props['Cat Client']?.select?.name || '',
-      createdAt: dossier.created_time,
-      url: dossier.url,
-    };
-
-    const [projects, tasks, contacts] = await Promise.all([
-      fetchProjects(dossierId),
-      fetchTasks(dossierId),
-      fetchContacts(dossierId),
-    ]);
-
-    // Separate projects
-    const activeProjects = projects.filter(p => !p.done);
-    const doneProjects = projects.filter(p => p.done);
-
-    // Group tasks by project
-    const tasksByProject = {};
-    const orphanTasks = [];
-
-    for (const task of tasks) {
-      if (task.projectId) {
-        if (!tasksByProject[task.projectId]) tasksByProject[task.projectId] = [];
-        tasksByProject[task.projectId].push(task);
-      } else {
-        orphanTasks.push(task);
+    // If cached=true, return cache immediately if available
+    if (cached && !refresh) {
+      const cache = getNotionCache(dossierId);
+      if (cache) {
+        return NextResponse.json({ ...cache.data, fromCache: true, isStale: cache.isStale });
       }
     }
 
-    // Enrich projects with their tasks
-    const projectsWithTasks = activeProjects.map(p => ({
-      ...p,
-      tasks: tasksByProject[p.id] || [],
-    }));
+    // Fetch from Notion
+    const data = await fetchAndBuildResponse(dossierId);
+    if (!data) {
+      return NextResponse.json({ error: 'Dossier not found' }, { status: 404 });
+    }
 
-    // Stats
-    const stats = {
-      activeProjects: activeProjects.length,
-      doneProjects: doneProjects.length,
-      pendingTasks: tasks.filter(t => !['Terminé', 'Done', 'Fait'].includes(t.status)).length,
-      contacts: contacts.length,
-    };
+    // Update cache
+    setNotionCache(dossierId, data);
 
-    return NextResponse.json({
-      dossier: dossierInfo,
-      projects: projectsWithTasks,
-      doneProjects,
-      orphanTasks,
-      contacts,
-      stats,
-    });
+    return NextResponse.json({ ...data, fromCache: false });
   } catch (error) {
     console.error('Dossier details error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { NOTION_PROJECTS_DB_ID, notionHeaders } from '@/lib/notion-config';
-import { insertAgentLog } from '@/lib/database';
+import { insertAgentLog, invalidateNotionCache } from '@/lib/database';
 
 export async function POST(req) {
   try {
@@ -12,11 +12,11 @@ export async function POST(req) {
       'Name': { title: [{ text: { content: name } }] },
       'Terminé': { checkbox: false },
       'Type': { select: { name: type || 'Lead' } },
-      'Priorité': { status: { name: priority || 'À prioriser' } },
+      'Priorité': { select: { name: priority || 'À prioriser' } },
     };
 
     if (niveau) {
-      properties['Niveau du Projet'] = { select: { name: niveau } };
+      properties['Niveau du Projet'] = { status: { name: niveau } };
     }
 
     if (dossierId) {
@@ -39,6 +39,11 @@ export async function POST(req) {
     if (!res.ok) {
       console.error('[Notion] Create project error:', data);
       return NextResponse.json({ error: data.message || 'Erreur Notion' }, { status: res.status });
+    }
+
+    // Invalidate cache for this dossier
+    if (dossierId) {
+      invalidateNotionCache(dossierId);
     }
 
     const dossierInfo = dossierName ? ` — Dossier ${dossierName}` : '';

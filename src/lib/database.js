@@ -79,8 +79,22 @@ function getDb() {
     addCol('conversations', 'email', 'TEXT DEFAULT NULL');
     addCol('conversations', 'whatsapp_name', 'TEXT DEFAULT NULL');
     addCol('conversations', 'custom_name', 'TEXT DEFAULT NULL');
+    addCol('conversations', 'notion_contact_id', 'TEXT DEFAULT NULL');
+    addCol('conversations', 'notion_contact_name', 'TEXT DEFAULT NULL');
+    addCol('conversations', 'notion_contact_url', 'TEXT DEFAULT NULL');
+    addCol('conversations', 'name_source', "TEXT DEFAULT 'whatsapp'");
     // Migrate existing 'name' to 'whatsapp_name' if whatsapp_name is null
     _db.exec(`UPDATE conversations SET whatsapp_name = name WHERE whatsapp_name IS NULL AND name IS NOT NULL`);
+    // Set name_source based on existing data
+    _db.exec(`UPDATE conversations SET name_source = 'dossier' WHERE notion_dossier_name IS NOT NULL AND name_source IS NULL`);
+    _db.exec(`UPDATE conversations SET name_source = 'manual' WHERE custom_name IS NOT NULL AND notion_dossier_name IS NULL AND name_source IS NULL`);
+    _db.exec(`UPDATE conversations SET name_source = 'whatsapp' WHERE name_source IS NULL`);
+    // Notion cache table
+    _db.exec(`CREATE TABLE IF NOT EXISTS notion_cache (
+      dossier_id TEXT PRIMARY KEY,
+      data TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`);
     // Migrate old statuses to hsva
     _db.exec(`UPDATE conversations SET status = 'hsva' WHERE status NOT IN ('client', 'assurance', 'prospect', 'hsva') OR status IS NULL`);
   }
@@ -101,9 +115,20 @@ function getAvatarColor(jid) {
   return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
 }
 
-// Display name priority: notion_dossier_name > custom_name > whatsapp_name > phone
+// Display name based on source: contact > dossier > manual > whatsapp
 export function getDisplayName(conv) {
-  return conv.notion_dossier_name || conv.custom_name || conv.whatsapp_name || conv.phone || conv.jid?.split('@')[0] || 'Inconnu';
+  const fallback = conv.whatsapp_name || conv.phone || conv.jid?.split('@')[0] || 'Inconnu';
+  switch (conv.name_source) {
+    case 'contact':
+      return conv.notion_contact_name || conv.notion_dossier_name || conv.custom_name || fallback;
+    case 'dossier':
+      return conv.notion_dossier_name || conv.custom_name || fallback;
+    case 'manual':
+      return conv.custom_name || fallback;
+    case 'whatsapp':
+    default:
+      return fallback;
+  }
 }
 
 // Enrich conversation with display_name for frontend
@@ -317,11 +342,15 @@ export function forceUpdateName(jid, name) {
     .run(name, getInitials(name), Date.now(), jid);
 }
 
-export function setCustomName(jid, name) {
+export function setCustomName(jid, name, setAsSource = true) {
   if (!name) return;
-  // Only update custom_name - this takes priority over whatsapp_name but not notion_dossier_name
-  getDb().prepare('UPDATE conversations SET custom_name=?, updated_at=? WHERE jid=?')
-    .run(name.trim(), Date.now(), jid);
+  if (setAsSource) {
+    getDb().prepare('UPDATE conversations SET custom_name=?, name_source=?, updated_at=? WHERE jid=?')
+      .run(name.trim(), 'manual', Date.now(), jid);
+  } else {
+    getDb().prepare('UPDATE conversations SET custom_name=?, updated_at=? WHERE jid=?')
+      .run(name.trim(), Date.now(), jid);
+  }
 }
 
 export function setEmail(jid, email) {
@@ -332,4 +361,42 @@ export function setEmail(jid, email) {
 export function setPhone(jid, phone) {
   getDb().prepare('UPDATE conversations SET phone=?, updated_at=? WHERE jid=?')
     .run(phone?.trim() || null, Date.now(), jid);
+}
+
+export function setNameSource(jid, source) {
+  if (!['contact', 'dossier', 'manual', 'whatsapp'].includes(source)) return;
+  getDb().prepare('UPDATE conversations SET name_source=?, updated_at=? WHERE jid=?')
+    .run(source, Date.now(), jid);
+}
+
+export function linkNotionContact(jid, contactId, contactName, contactUrl) {
+  getDb().prepare('UPDATE conversations SET notion_contact_id=?, notion_contact_name=?, notion_contact_url=?, name_source=?, updated_at=? WHERE jid=?')
+    .run(contactId, contactName, contactUrl, 'contact', Date.now(), jid);
+}
+
+export function unlinkNotionContact(jid) {
+  getDb().prepare('UPDATE conversations SET notion_contact_id=NULL, notion_contact_name=NULL, notion_contact_url=NULL, updated_at=? WHERE jid=?')
+    .run(Date.now(), jid);
+}
+
+// ==================== NOTION CACHE ====================
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+export function getNotionCache(dossierId) {
+  const row = getDb().prepare('SELECT data, updated_at FROM notion_cache WHERE dossier_id = ?').get(dossierId);
+  if (!row) return null;
+  return {
+    data: JSON.parse(row.data),
+    updatedAt: row.updated_at,
+    isStale: Date.now() - row.updated_at > CACHE_TTL,
+  };
+}
+
+export function setNotionCache(dossierId, data) {
+  getDb().prepare('INSERT OR REPLACE INTO notion_cache (dossier_id, data, updated_at) VALUES (?, ?, ?)')
+    .run(dossierId, JSON.stringify(data), Date.now());
+}
+
+export function invalidateNotionCache(dossierId) {
+  getDb().prepare('DELETE FROM notion_cache WHERE dossier_id = ?').run(dossierId);
 }

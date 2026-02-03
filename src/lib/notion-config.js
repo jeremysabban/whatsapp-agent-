@@ -6,6 +6,7 @@ export const NOTION_VERSION = '2022-06-28';
 // Base IDs for task/project creation
 export const NOTION_TASKS_DB_ID = '2dcac98446f5813a9389d0a675eec96f';
 export const NOTION_PROJECTS_DB_ID = '2dcac98446f5819db597ee01fb67ac27';
+export const NOTION_CONTRACTS_DB_ID = ''; // TODO: Add contracts database ID
 
 export function notionHeaders() {
   return {

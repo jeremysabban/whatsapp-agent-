@@ -93,6 +93,7 @@ export default function WhatsAppAgent() {
   const [notionSearching, setNotionSearching] = useState(false);
   const [showNotionLink, setShowNotionLink] = useState(false);
   const [showCreateTask, setShowCreateTask] = useState(false);
+  const [showNameSourceModal, setShowNameSourceModal] = useState(false);
   const [showCreateOpp, setShowCreateOpp] = useState(false);
   const [taskForm, setTaskForm] = useState({ name: '', priority: 'À prioriser', date: new Date().toISOString().split('T')[0], projectId: '' });
   const [projectForm, setProjectForm] = useState({ name: '', type: 'Lead', priority: 'À prioriser', niveau: '' });
@@ -155,10 +156,31 @@ export default function WhatsAppAgent() {
     try { const r = await fetch(`/api/notion/dossier-overview?dossierId=${encodeURIComponent(dossierId)}`); const d = await r.json(); setDossierOverview(d.error ? null : d); } catch { setDossierOverview(null); }
     setLoadingOverview(false);
   }, []);
-  const loadDossierDetails = useCallback(async (dossierId) => {
+  const loadDossierDetails = useCallback(async (dossierId, forceRefresh = false) => {
     if (!dossierId) { setDossierDetails(null); return; }
     setLoadingDetails(true);
-    try { const r = await fetch(`/api/notion/dossier-details?dossierId=${encodeURIComponent(dossierId)}`); const d = await r.json(); setDossierDetails(d.error ? null : d); } catch { setDossierDetails(null); }
+    try {
+      // First, try to get from cache
+      if (!forceRefresh) {
+        const cachedRes = await fetch(`/api/notion/dossier-details?dossierId=${encodeURIComponent(dossierId)}&cached=true`);
+        const cached = await cachedRes.json();
+        if (!cached.error && cached.fromCache) {
+          setDossierDetails(cached);
+          setLoadingDetails(false);
+          // If cache is stale, refresh in background
+          if (cached.isStale) {
+            fetch(`/api/notion/dossier-details?dossierId=${encodeURIComponent(dossierId)}&refresh=true`)
+              .then(r => r.json())
+              .then(d => { if (!d.error) setDossierDetails(d); });
+          }
+          return;
+        }
+      }
+      // No cache or force refresh - fetch from Notion
+      const r = await fetch(`/api/notion/dossier-details?dossierId=${encodeURIComponent(dossierId)}`);
+      const d = await r.json();
+      setDossierDetails(d.error ? null : d);
+    } catch { setDossierDetails(null); }
     setLoadingDetails(false);
   }, []);
   const loadAllTasks = useCallback(async () => {
@@ -220,9 +242,29 @@ export default function WhatsAppAgent() {
   // Notion
   const searchDossiers = async (q) => { setNotionSearching(true); setNotionError(null); try { const r = await fetch('/api/notion/search-dossiers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: q }) }); const d = await r.json(); if (d.error) { setNotionError(d.error); setNotionResults([]); } else setNotionResults(d.results || []); } catch { setNotionError('Erreur Notion'); setNotionResults([]); } setNotionSearching(false); };
   const linkDossier = async (dossier) => { if (!selectedJid) return; setNotionLoading(true); try { await fetch('/api/notion/link-dossier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jid: selectedJid, dossierId: dossier.id, dossierName: dossier.name, dossierUrl: dossier.url }) }); setShowNotionLink(false); setNotionSuccess('Dossier lié !'); setTimeout(() => setNotionSuccess(null), 3000); loadMessages(selectedJid); loadConversations(); loadDossierProjects(dossier.id); loadDossierDetails(dossier.id); } catch {} setNotionLoading(false); };
-  const createTask = async () => { if (!taskForm.name) return; setNotionLoading(true); try { const r = await fetch('/api/notion/create-task', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: taskForm.name, priority: taskForm.priority, date: taskForm.date || null, dossierId: selectedConv?.notion_dossier_id, dossierName: selectedConv?.notion_dossier_name, conversationJid: selectedJid, conversationName: selectedConv?.name, projectId: taskForm.projectId || null }) }); const d = await r.json(); if (d.success) { setShowCreateTask(false); setTaskForm({ name: '', priority: 'À prioriser', date: '', projectId: '' }); setNotionSuccess('Tâche créée !'); setTimeout(() => setNotionSuccess(null), 3000); if (selectedConv?.notion_dossier_id) loadDossierDetails(selectedConv.notion_dossier_id); } else alert('Erreur: ' + (d.error || '?')); } catch (e) { alert('Erreur: ' + e.message); } setNotionLoading(false); };
-  const createProject = async () => { if (!projectForm.name) return; setNotionLoading(true); try { const r = await fetch('/api/notion/create-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: projectForm.name, type: projectForm.type, priority: projectForm.priority, niveau: projectForm.niveau || null, date: new Date().toISOString().split('T')[0], dossierId: selectedConv?.notion_dossier_id, dossierName: selectedConv?.notion_dossier_name, conversationJid: selectedJid, conversationName: selectedConv?.name }) }); const d = await r.json(); if (d.success) { setShowCreateOpp(false); setProjectForm({ name: '', type: 'Lead', priority: 'À prioriser', niveau: '' }); setNotionSuccess('Projet créé !'); setTimeout(() => setNotionSuccess(null), 3000); loadDossierProjects(selectedConv?.notion_dossier_id); if (selectedConv?.notion_dossier_id) loadDossierDetails(selectedConv.notion_dossier_id); } else alert('Erreur: ' + (d.error || '?')); } catch (e) { alert('Erreur: ' + e.message); } setNotionLoading(false); };
+  const createTask = async () => { if (!taskForm.name) return; setNotionLoading(true); try { const r = await fetch('/api/notion/create-task', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: taskForm.name, priority: taskForm.priority, date: taskForm.date || null, dossierId: selectedConv?.notion_dossier_id, dossierName: selectedConv?.notion_dossier_name, conversationJid: selectedJid, conversationName: selectedConv?.name, projectId: taskForm.projectId || null }) }); const d = await r.json(); if (d.success) { setShowCreateTask(false); setTaskForm({ name: '', priority: 'À prioriser', date: new Date().toISOString().split('T')[0], projectId: '' }); setNotionSuccess('Tâche créée !'); setTimeout(() => setNotionSuccess(null), 3000); if (selectedConv?.notion_dossier_id) loadDossierDetails(selectedConv.notion_dossier_id, true); } else alert('Erreur: ' + (d.error || '?')); } catch (e) { alert('Erreur: ' + e.message); } setNotionLoading(false); };
+  const createProject = async () => { if (!projectForm.name) return; setNotionLoading(true); try { const r = await fetch('/api/notion/create-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: projectForm.name, type: projectForm.type, priority: projectForm.priority, niveau: projectForm.niveau || null, date: new Date().toISOString().split('T')[0], dossierId: selectedConv?.notion_dossier_id, dossierName: selectedConv?.notion_dossier_name, conversationJid: selectedJid, conversationName: selectedConv?.name }) }); const d = await r.json(); if (d.success) { setShowCreateOpp(false); setProjectForm({ name: '', type: 'Lead', priority: 'À prioriser', niveau: '' }); setNotionSuccess('Projet créé !'); setTimeout(() => setNotionSuccess(null), 3000); loadDossierProjects(selectedConv?.notion_dossier_id); if (selectedConv?.notion_dossier_id) loadDossierDetails(selectedConv.notion_dossier_id, true); } else alert('Erreur: ' + (d.error || '?')); } catch (e) { alert('Erreur: ' + e.message); } setNotionLoading(false); };
   const syncToNotion = async () => { if (!selectedConv) return; setNotionLoading(true); try { const r = await fetch('/api/notion/sync-contact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: selectedConv.name, phone: selectedConv.phone, email: selectedConv.email || null, dossierId: selectedConv.notion_dossier_id || null }) }); const d = await r.json(); if (d.success) { setNotionSuccess(d.action === 'created' ? 'Contact Notion créé !' : 'Contact Notion mis à jour !'); setTimeout(() => setNotionSuccess(null), 3000); } else alert('Erreur: ' + (d.error || '?')); } catch (e) { alert('Erreur: ' + e.message); } setNotionLoading(false); };
+
+  // Link conversation to a Notion contact
+  const linkConversationToContact = async (contact) => {
+    if (!selectedJid) return;
+    await api('update-status', 'POST', { jid: selectedJid, notion_contact_id: contact.id, notion_contact_name: contact.name, notion_contact_url: contact.url });
+    loadConversations();
+    if (selectedJid) loadMessages(selectedJid);
+  };
+
+  // Update name source
+  const updateNameSource = async (source, customName = null) => {
+    if (!selectedJid) return;
+    const body = { jid: selectedJid, name_source: source };
+    if (source === 'manual' && customName) body.custom_name = customName;
+    if (source === 'whatsapp' || source === 'dossier') body.notion_contact_id = null; // unlink contact
+    await api('update-status', 'POST', body);
+    loadConversations();
+    if (selectedJid) loadMessages(selectedJid);
+    setShowNameSourceModal(false);
+  };
 
   // ==================== SIDEBAR ====================
   const Sidebar = () => (<div className={`fixed inset-y-0 left-0 z-50 w-64 bg-gray-950 text-white transform transition-transform ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 lg:relative lg:z-0 flex flex-col`}>
@@ -450,15 +492,15 @@ export default function WhatsAppAgent() {
           <button onClick={() => { setView('conversations'); setSelectedJid(null); }} className="p-2 hover:bg-gray-100 rounded-lg"><Icon name="back" className="w-5 h-5 text-gray-600" /></button>
           <div className={`w-10 h-10 rounded-full ${c.avatar_color} flex items-center justify-center text-white text-sm font-bold`}>{getInitialsFor(c)}</div>
           <div className="flex-1 min-w-0">
-            {editingName ? (
-              <div className="flex items-center gap-2">
-                <input type="text" value={editNameValue} onChange={e => setEditNameValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') updateName(c.jid, editNameValue); if (e.key === 'Escape') setEditingName(false); }} className="font-bold text-gray-900 bg-white border border-gray-300 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-48" autoFocus />
-                <button onClick={() => updateName(c.jid, editNameValue)} className="text-emerald-600 text-xs hover:underline">✓</button>
-                <button onClick={() => setEditingName(false)} className="text-gray-400 text-xs hover:text-gray-600">✕</button>
-              </div>
-            ) : (
-              <h2 className="font-bold text-gray-900 flex items-center gap-1.5 cursor-pointer group" onClick={() => { setEditNameValue(c.custom_name || c.whatsapp_name || getName(c)); setEditingName(true); }}>{getName(c)} <Icon name="edit" className="w-3.5 h-3.5 text-gray-300 group-hover:text-gray-500" /></h2>
-            )}
+            <div className="flex items-center gap-1.5">
+              <h2 className="font-bold text-gray-900">{getName(c)}</h2>
+              <button onClick={() => { setEditNameValue(c.custom_name || c.whatsapp_name || getName(c)); setShowNameSourceModal(true); }} className="p-1 hover:bg-gray-100 rounded"><Icon name="edit" className="w-3.5 h-3.5 text-gray-400 hover:text-gray-600" /></button>
+              {c.name_source && c.name_source !== 'whatsapp' && (
+                <span className={`text-xs px-1.5 py-0.5 rounded ${c.name_source === 'contact' ? 'bg-emerald-100 text-emerald-700' : c.name_source === 'dossier' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                  {c.name_source === 'contact' ? '📇' : c.name_source === 'dossier' ? '📁' : '✏️'}
+                </span>
+              )}
+            </div>
             {editingPhone ? (
               <div className="flex items-center gap-1">
                 <input type="tel" value={editPhoneValue} onChange={e => setEditPhoneValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') updatePhone(c.jid, editPhoneValue); if (e.key === 'Escape') setEditingPhone(false); }} className="text-xs px-1.5 py-0.5 rounded border border-gray-300 bg-white w-36 focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="+33 6 12 34 56 78" autoFocus />
@@ -554,8 +596,21 @@ export default function WhatsAppAgent() {
           {/* RIGHT COLUMN: Notion Panel (40%) */}
           <div className="w-[40%] overflow-y-auto space-y-3">
             {c.notion_dossier_id ? (
-              loadingDetails ? (
-                <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" /></div>
+              loadingDetails && !dossierDetails ? (
+                /* Skeleton Loading */
+                <div className="space-y-3 animate-pulse">
+                  <div className="bg-gray-200 rounded-xl h-24" />
+                  <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
+                    <div className="h-4 bg-gray-200 rounded w-24" />
+                    <div className="h-12 bg-gray-100 rounded" />
+                    <div className="h-12 bg-gray-100 rounded" />
+                  </div>
+                  <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-2">
+                    <div className="h-4 bg-gray-200 rounded w-20" />
+                    <div className="h-16 bg-gray-100 rounded" />
+                    <div className="h-16 bg-gray-100 rounded" />
+                  </div>
+                </div>
               ) : !dossierDetails ? (
                 <div className="bg-white rounded-xl border border-gray-200 p-6 text-center">
                   <Icon name="notion" className="w-10 h-10 text-gray-300 mx-auto" />
@@ -575,11 +630,36 @@ export default function WhatsAppAgent() {
                         </div>
                       </div>
                       <div className="flex gap-2">
+                        <button onClick={() => loadDossierDetails(c.notion_dossier_id, true)} className="p-2 bg-white/10 hover:bg-white/20 rounded-lg" title="Actualiser">🔄</button>
                         {dossierDetails.dossier?.driveUrl && <a href={dossierDetails.dossier.driveUrl} target="_blank" rel="noopener" className="p-2 bg-white/10 hover:bg-white/20 rounded-lg" title="Drive"><Icon name="drive" className="w-4 h-4" /></a>}
                         <a href={dossierDetails.dossier?.url} target="_blank" rel="noopener" className="p-2 bg-white/10 hover:bg-white/20 rounded-lg" title="Notion">Ouvrir ↗</a>
                       </div>
                     </div>
                   </div>
+
+                  {/* Contracts Section */}
+                  {dossierDetails.contracts?.length > 0 && (
+                    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+                        <h4 className="font-semibold text-gray-900 text-sm flex items-center gap-2">📋 Contrats <span className="bg-gray-200 text-gray-600 text-xs px-1.5 py-0.5 rounded-full">{dossierDetails.contracts.length}</span></h4>
+                      </div>
+                      <div className="divide-y divide-gray-50">
+                        {dossierDetails.contracts.map(c => {
+                          const borderColor = c.projectType === 'Gestion' ? 'border-l-green-500' : c.projectType === 'Lead' ? 'border-l-purple-500' : c.projectType === 'Sinistre' ? 'border-l-red-500' : 'border-l-gray-300';
+                          return (
+                            <a key={c.id} href={c.url} target="_blank" rel="noopener" className={`block p-3 hover:bg-gray-50 transition-colors border-l-4 ${borderColor}`}>
+                              <p className="font-medium text-sm text-gray-900 truncate">{c.name}</p>
+                              <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+                                {c.compagnie && <span className="font-medium text-gray-700">{c.compagnie}</span>}
+                                {c.productType && <span className="px-1.5 py-0.5 bg-gray-100 rounded">{c.productType}</span>}
+                                {c.status && <span className="text-gray-400">{c.status}</span>}
+                              </div>
+                            </a>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Projects with Tasks */}
                   {(dossierDetails.projects?.length > 0) && (
@@ -651,9 +731,43 @@ export default function WhatsAppAgent() {
                     </div>
                   )}
 
+                  {/* Contacts Section */}
+                  {dossierDetails.contacts?.length > 0 && (
+                    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                      <div className="px-3 py-2 border-b border-gray-100 bg-gray-50">
+                        <h4 className="font-semibold text-gray-900 text-sm flex items-center gap-2">👥 Contacts <span className="bg-gray-200 text-gray-600 text-xs px-1.5 py-0.5 rounded-full">{dossierDetails.contacts.length}</span></h4>
+                      </div>
+                      <div className="divide-y divide-gray-50">
+                        {dossierDetails.contacts.map(contact => {
+                          const isLinked = c.notion_contact_id === contact.id;
+                          return (
+                            <div key={contact.id} className={`p-3 ${isLinked ? 'bg-emerald-50 border-l-4 border-l-emerald-500' : 'hover:bg-gray-50'}`}>
+                              <div className="flex items-center justify-between">
+                                <div className="flex-1 min-w-0">
+                                  <p className={`font-medium text-sm ${isLinked ? 'text-emerald-700' : 'text-gray-900'} truncate`}>{contact.name}</p>
+                                  <div className="flex items-center gap-2 mt-0.5 text-xs text-gray-500">
+                                    {contact.phone && <span>{contact.phone}</span>}
+                                    {contact.statut?.length > 0 && <span className="px-1.5 py-0.5 bg-gray-100 rounded">{contact.statut[0]}</span>}
+                                  </div>
+                                </div>
+                                <div className="flex gap-1">
+                                  {!isLinked && (
+                                    <button onClick={() => linkConversationToContact(contact)} className="text-xs text-blue-600 hover:underline px-2 py-1">Lier</button>
+                                  )}
+                                  <a href={contact.url} target="_blank" rel="noopener" className="text-xs text-gray-400 hover:text-gray-600 px-2 py-1">↗</a>
+                                </div>
+                              </div>
+                              {isLinked && <p className="text-xs text-emerald-600 mt-1">✓ Lié à cette conversation</p>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Stats */}
                   <div className="bg-gray-50 rounded-lg p-3 text-center text-xs text-gray-500">
-                    {dossierDetails.stats?.activeProjects || 0} projets · {dossierDetails.stats?.pendingTasks || 0} tâches · {dossierDetails.stats?.contacts || 0} contacts
+                    {dossierDetails.stats?.contracts || 0} contrats · {dossierDetails.stats?.activeProjects || 0} projets · {dossierDetails.stats?.pendingTasks || 0} tâches
                   </div>
 
                   {/* Create Task Form */}
@@ -952,6 +1066,82 @@ export default function WhatsAppAgent() {
                 </>
               );
             })()}
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Name Source Modal */}
+    {showNameSourceModal && selectedConv && (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowNameSourceModal(false)}>
+        <div className="bg-white rounded-xl shadow-xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+            <h3 className="font-semibold text-gray-900">Source du nom</h3>
+            <button onClick={() => setShowNameSourceModal(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+          </div>
+          <div className="p-4 space-y-2">
+            {/* Contact Notion option */}
+            {selectedConv.notion_dossier_id && dossierDetails?.contacts?.length > 0 && (
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-gray-50 border-b border-gray-200">
+                  <p className="font-medium text-sm text-gray-700">📇 Contact Notion</p>
+                </div>
+                <div className="max-h-40 overflow-y-auto">
+                  {dossierDetails.contacts.map(contact => (
+                    <button key={contact.id} onClick={() => linkConversationToContact(contact).then(() => setShowNameSourceModal(false))} className={`w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between ${selectedConv.notion_contact_id === contact.id ? 'bg-emerald-50' : ''}`}>
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{contact.name}</p>
+                        {contact.phone && <p className="text-xs text-gray-500">{contact.phone}</p>}
+                      </div>
+                      {selectedConv.notion_contact_id === contact.id && <span className="text-emerald-500">✓</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Dossier Notion option */}
+            {selectedConv.notion_dossier_id && (
+              <button onClick={() => updateNameSource('dossier')} className={`w-full text-left px-3 py-2.5 border rounded-lg hover:bg-gray-50 ${selectedConv.name_source === 'dossier' ? 'border-blue-500 bg-blue-50' : 'border-gray-200'}`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-medium text-sm text-gray-700">📁 Dossier Notion</p>
+                    <p className="text-xs text-gray-500">{selectedConv.notion_dossier_name}</p>
+                  </div>
+                  {selectedConv.name_source === 'dossier' && <span className="text-blue-500">✓</span>}
+                </div>
+              </button>
+            )}
+
+            {/* Manual option */}
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              <button onClick={() => setEditingName(true)} className={`w-full text-left px-3 py-2.5 hover:bg-gray-50 ${selectedConv.name_source === 'manual' ? 'bg-gray-50' : ''}`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-medium text-sm text-gray-700">✏️ Saisie manuelle</p>
+                    {selectedConv.custom_name && <p className="text-xs text-gray-500">{selectedConv.custom_name}</p>}
+                  </div>
+                  {selectedConv.name_source === 'manual' && <span className="text-gray-600">✓</span>}
+                </div>
+              </button>
+              {editingName && (
+                <div className="px-3 py-2 border-t border-gray-200 flex gap-2">
+                  <input type="text" value={editNameValue} onChange={e => setEditNameValue(e.target.value)} placeholder="Nom personnalisé..." className="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-emerald-500" autoFocus />
+                  <button onClick={() => { updateNameSource('manual', editNameValue); setEditingName(false); }} className="px-3 py-1.5 bg-emerald-500 text-white text-sm rounded hover:bg-emerald-600">OK</button>
+                </div>
+              )}
+            </div>
+
+            {/* WhatsApp option */}
+            <button onClick={() => updateNameSource('whatsapp')} className={`w-full text-left px-3 py-2.5 border rounded-lg hover:bg-gray-50 ${selectedConv.name_source === 'whatsapp' || !selectedConv.name_source ? 'border-green-500 bg-green-50' : 'border-gray-200'}`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-sm text-gray-700">📱 WhatsApp</p>
+                  <p className="text-xs text-gray-500">{selectedConv.whatsapp_name || selectedConv.phone}</p>
+                </div>
+                {(selectedConv.name_source === 'whatsapp' || !selectedConv.name_source) && <span className="text-green-500">✓</span>}
+              </div>
+            </button>
           </div>
         </div>
       </div>
