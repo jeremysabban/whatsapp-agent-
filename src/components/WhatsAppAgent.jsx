@@ -67,6 +67,10 @@ function daysSince(ts) { if (!ts) return 999; return Math.floor((Date.now() - ts
 function formatLogTime(ts) { const d = new Date(ts); const now = new Date(); const time = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }); return d.toDateString() === now.toDateString() ? time : `${d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })} ${time}`; }
 function getLabelColor(n) { return LABEL_COLORS[n?.toLowerCase()] || 'bg-gray-100 text-gray-600 border-gray-200'; }
 
+// Display name helper: notion_dossier_name > custom_name > whatsapp_name > name > phone
+function getName(c) { return c.display_name || c.notion_dossier_name || c.custom_name || c.whatsapp_name || c.name || c.phone || 'Inconnu'; }
+function getInitialsFor(c) { return c.display_initials || c.avatar_initials || '??'; }
+
 // ==================== MAIN ====================
 export default function WhatsAppAgent() {
   const [view, setView] = useState('dashboard');
@@ -84,8 +88,6 @@ export default function WhatsAppAgent() {
   const [searchQuery, setSearchQuery] = useState('');
   const [newMessage, setNewMessage] = useState('');
   const [draggedCard, setDraggedCard] = useState(null);
-  const [editingNotes, setEditingNotes] = useState(false);
-  const [notesText, setNotesText] = useState('');
   const [notionSearch, setNotionSearch] = useState('');
   const [notionResults, setNotionResults] = useState([]);
   const [notionSearching, setNotionSearching] = useState(false);
@@ -105,7 +107,6 @@ export default function WhatsAppAgent() {
   const [agentLogs, setAgentLogs] = useState([]);
   const [agentLogTotal, setAgentLogTotal] = useState(0);
   const [logTypeFilter, setLogTypeFilter] = useState(null);
-  const [detailTab, setDetailTab] = useState('messages');
   const [editingName, setEditingName] = useState(false);
   const [editNameValue, setEditNameValue] = useState('');
   const [editingEmail, setEditingEmail] = useState(false);
@@ -115,6 +116,12 @@ export default function WhatsAppAgent() {
   const [dossierProjects, setDossierProjects] = useState([]);
   const [dossierOverview, setDossierOverview] = useState(null);
   const [loadingOverview, setLoadingOverview] = useState(false);
+  const [dossierDetails, setDossierDetails] = useState(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+  const [allTasks, setAllTasks] = useState([]);
+  const [loadingAllTasks, setLoadingAllTasks] = useState(false);
+  const [starredConvs, setStarredConvs] = useState([]);
+  const [tagProjectModal, setTagProjectModal] = useState(null); // { tag: 'Gestion' | 'Sinistre' | 'Lead', jid: string }
   const eventSourceRef = useRef(null);
   const messagesEndRef = useRef(null);
   const messageInputRef = useRef(null);
@@ -148,10 +155,30 @@ export default function WhatsAppAgent() {
     try { const r = await fetch(`/api/notion/dossier-overview?dossierId=${encodeURIComponent(dossierId)}`); const d = await r.json(); setDossierOverview(d.error ? null : d); } catch { setDossierOverview(null); }
     setLoadingOverview(false);
   }, []);
+  const loadDossierDetails = useCallback(async (dossierId) => {
+    if (!dossierId) { setDossierDetails(null); return; }
+    setLoadingDetails(true);
+    try { const r = await fetch(`/api/notion/dossier-details?dossierId=${encodeURIComponent(dossierId)}`); const d = await r.json(); setDossierDetails(d.error ? null : d); } catch { setDossierDetails(null); }
+    setLoadingDetails(false);
+  }, []);
+  const loadAllTasks = useCallback(async () => {
+    setLoadingAllTasks(true);
+    try { const r = await fetch('/api/notion/all-tasks'); const d = await r.json(); setAllTasks(d.tasks || []); } catch { setAllTasks([]); }
+    setLoadingAllTasks(false);
+  }, []);
+  const loadStarredConvs = useCallback(async () => {
+    try { const d = await api('conversations?starred=1'); setStarredConvs(d.conversations?.filter(c => c.starred) || []); } catch { setStarredConvs([]); }
+  }, []);
+  const toggleStar = async (jid, currentStarred) => {
+    await api('update-status', 'POST', { jid, starred: !currentStarred });
+    loadConversations();
+    loadStarredConvs();
+    if (selectedJid === jid) loadMessages(jid);
+  };
 
   // ==================== SSE ====================
   useEffect(() => {
-    checkStatus(); loadConversations(); loadDocuments();
+    checkStatus(); loadConversations(); loadDocuments(); loadStarredConvs(); loadAllTasks();
     const es = new EventSource('/api/whatsapp/events'); eventSourceRef.current = es;
     es.onmessage = (event) => { try { const d = JSON.parse(event.data);
       if (d.type === 'status') { setConnected(d.data.status === 'connected'); setConnecting(d.data.status === 'connecting'); if (d.data.status === 'connected') { setQrImage(null); loadConversations(); } }
@@ -173,7 +200,7 @@ export default function WhatsAppAgent() {
   const handleConnect = async () => { setConnecting(true); await api('connect', 'POST'); const iv = setInterval(async () => { const d = await api('qr'); if (d.qr) setQrImage(d.qr); if (d.status === 'connected' || d.status === 'disconnected') { clearInterval(iv); if (d.status === 'connected') { setConnected(true); setConnecting(false); setQrImage(null); } } }, 2000); };
   const fetchQR = async () => { const d = await api('qr'); if (d.qr) setQrImage(d.qr); };
   const handleDisconnect = async () => { await api('disconnect', 'POST'); setConnected(false); setConnecting(false); setQrImage(null); };
-  const openConversation = (conv) => { setSelectedJid(conv.jid); setView('detail'); loadMessages(conv.jid); setNotesText(conv.notes || ''); setEditingNotes(false); setEditingName(false); setEditingEmail(false); setDetailTab('messages'); if (conv.notion_dossier_id) loadDossierProjects(conv.notion_dossier_id); else setDossierProjects([]); };
+  const openConversation = (conv) => { setSelectedJid(conv.jid); setView('detail'); loadMessages(conv.jid); setEditingName(false); setEditingEmail(false); if (conv.notion_dossier_id) { loadDossierDetails(conv.notion_dossier_id); loadDossierProjects(conv.notion_dossier_id); } else { setDossierDetails(null); setDossierProjects([]); } };
   const updateStatus = async (jid, s) => { await api('update-status', 'POST', { jid, status: s }); loadConversations(); if (selectedJid === jid) loadMessages(jid); };
   const updateCategory = async (jid, c) => { await api('update-status', 'POST', { jid, category: c }); loadConversations(); if (selectedJid === jid) loadMessages(jid); };
   const toggleTag = async (jid, tag, currentTags) => {
@@ -184,7 +211,6 @@ export default function WhatsAppAgent() {
     if (selectedJid === jid) loadMessages(jid);
   };
   const updatePriority = async (jid, p) => { await api('update-status', 'POST', { jid, priority: p }); loadConversations(); };
-  const saveNotes = async (jid) => { await api('update-status', 'POST', { jid, notes: notesText }); setEditingNotes(false); loadConversations(); loadMessages(jid); };
   const updateDocStatus = async (docId, s) => { await api('update-doc-status', 'POST', { docId, status: s }); loadDocuments(); if (selectedJid) loadMessages(selectedJid); };
   const sendMsg = async () => { const text = messageInputRef.current?.value?.trim(); if (!text || !selectedJid) return; const opt = { id: `opt_${Date.now()}`, text, from_me: true, timestamp: Date.now(), is_document: false }; setSelectedMessages(prev => [...prev, opt]); if (messageInputRef.current) messageInputRef.current.value = ''; try { await api('send', 'POST', { jid: selectedJid, text }); loadMessages(selectedJid); } catch {} };
   const updateName = async (jid, name) => { if (!name.trim()) return; await api('update-status', 'POST', { jid, custom_name: name.trim() }); setEditingName(false); loadConversations(); loadMessages(jid); };
@@ -193,9 +219,9 @@ export default function WhatsAppAgent() {
 
   // Notion
   const searchDossiers = async (q) => { setNotionSearching(true); setNotionError(null); try { const r = await fetch('/api/notion/search-dossiers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: q }) }); const d = await r.json(); if (d.error) { setNotionError(d.error); setNotionResults([]); } else setNotionResults(d.results || []); } catch { setNotionError('Erreur Notion'); setNotionResults([]); } setNotionSearching(false); };
-  const linkDossier = async (dossier) => { if (!selectedJid) return; setNotionLoading(true); try { await fetch('/api/notion/link-dossier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jid: selectedJid, dossierId: dossier.id, dossierName: dossier.name, dossierUrl: dossier.url }) }); setShowNotionLink(false); setNotionSuccess('Dossier lié !'); setTimeout(() => setNotionSuccess(null), 3000); loadMessages(selectedJid); loadConversations(); loadDossierProjects(dossier.id); } catch {} setNotionLoading(false); };
-  const createTask = async () => { if (!taskForm.name) return; setNotionLoading(true); try { const r = await fetch('/api/notion/create-task', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: taskForm.name, priority: taskForm.priority, date: taskForm.date || null, dossierId: selectedConv?.notion_dossier_id, dossierName: selectedConv?.notion_dossier_name, conversationJid: selectedJid, conversationName: selectedConv?.name, projectId: taskForm.projectId || null }) }); const d = await r.json(); if (d.success) { setShowCreateTask(false); setTaskForm({ name: '', priority: 'À prioriser', date: '', projectId: '' }); setNotionSuccess('Tâche créée !'); setTimeout(() => setNotionSuccess(null), 3000); } else alert('Erreur: ' + (d.error || '?')); } catch (e) { alert('Erreur: ' + e.message); } setNotionLoading(false); };
-  const createProject = async () => { if (!projectForm.name) return; setNotionLoading(true); try { const r = await fetch('/api/notion/create-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: projectForm.name, type: projectForm.type, priority: projectForm.priority, niveau: projectForm.niveau || null, date: new Date().toISOString().split('T')[0], dossierId: selectedConv?.notion_dossier_id, dossierName: selectedConv?.notion_dossier_name, conversationJid: selectedJid, conversationName: selectedConv?.name }) }); const d = await r.json(); if (d.success) { setShowCreateOpp(false); setProjectForm({ name: '', type: 'Lead', priority: 'À prioriser', niveau: '' }); setNotionSuccess('Projet créé !'); setTimeout(() => setNotionSuccess(null), 3000); loadDossierProjects(selectedConv?.notion_dossier_id); } else alert('Erreur: ' + (d.error || '?')); } catch (e) { alert('Erreur: ' + e.message); } setNotionLoading(false); };
+  const linkDossier = async (dossier) => { if (!selectedJid) return; setNotionLoading(true); try { await fetch('/api/notion/link-dossier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jid: selectedJid, dossierId: dossier.id, dossierName: dossier.name, dossierUrl: dossier.url }) }); setShowNotionLink(false); setNotionSuccess('Dossier lié !'); setTimeout(() => setNotionSuccess(null), 3000); loadMessages(selectedJid); loadConversations(); loadDossierProjects(dossier.id); loadDossierDetails(dossier.id); } catch {} setNotionLoading(false); };
+  const createTask = async () => { if (!taskForm.name) return; setNotionLoading(true); try { const r = await fetch('/api/notion/create-task', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: taskForm.name, priority: taskForm.priority, date: taskForm.date || null, dossierId: selectedConv?.notion_dossier_id, dossierName: selectedConv?.notion_dossier_name, conversationJid: selectedJid, conversationName: selectedConv?.name, projectId: taskForm.projectId || null }) }); const d = await r.json(); if (d.success) { setShowCreateTask(false); setTaskForm({ name: '', priority: 'À prioriser', date: '', projectId: '' }); setNotionSuccess('Tâche créée !'); setTimeout(() => setNotionSuccess(null), 3000); if (selectedConv?.notion_dossier_id) loadDossierDetails(selectedConv.notion_dossier_id); } else alert('Erreur: ' + (d.error || '?')); } catch (e) { alert('Erreur: ' + e.message); } setNotionLoading(false); };
+  const createProject = async () => { if (!projectForm.name) return; setNotionLoading(true); try { const r = await fetch('/api/notion/create-project', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: projectForm.name, type: projectForm.type, priority: projectForm.priority, niveau: projectForm.niveau || null, date: new Date().toISOString().split('T')[0], dossierId: selectedConv?.notion_dossier_id, dossierName: selectedConv?.notion_dossier_name, conversationJid: selectedJid, conversationName: selectedConv?.name }) }); const d = await r.json(); if (d.success) { setShowCreateOpp(false); setProjectForm({ name: '', type: 'Lead', priority: 'À prioriser', niveau: '' }); setNotionSuccess('Projet créé !'); setTimeout(() => setNotionSuccess(null), 3000); loadDossierProjects(selectedConv?.notion_dossier_id); if (selectedConv?.notion_dossier_id) loadDossierDetails(selectedConv.notion_dossier_id); } else alert('Erreur: ' + (d.error || '?')); } catch (e) { alert('Erreur: ' + e.message); } setNotionLoading(false); };
   const syncToNotion = async () => { if (!selectedConv) return; setNotionLoading(true); try { const r = await fetch('/api/notion/sync-contact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: selectedConv.name, phone: selectedConv.phone, email: selectedConv.email || null, dossierId: selectedConv.notion_dossier_id || null }) }); const d = await r.json(); if (d.success) { setNotionSuccess(d.action === 'created' ? 'Contact Notion créé !' : 'Contact Notion mis à jour !'); setTimeout(() => setNotionSuccess(null), 3000); } else alert('Erreur: ' + (d.error || '?')); } catch (e) { alert('Erreur: ' + e.message); } setNotionLoading(false); };
 
   // ==================== SIDEBAR ====================
@@ -207,7 +233,6 @@ export default function WhatsAppAgent() {
       { id: 'kanban', icon: 'kanban', label: 'Pipeline' },
       { id: 'conversations', icon: 'message', label: 'Conversations', badge: (labelStats.client||0)+(labelStats.assurance||0)+(labelStats.prospect||0) },
       { id: 'documents', icon: 'file', label: 'Documents', badge: stats.pending_docs || 0 },
-      { id: 'journal', icon: 'journal', label: 'Journal Agent' },
       { id: 'analytics', icon: 'chart', label: 'Analytics' },
       { id: 'settings', icon: 'settings', label: 'Paramètres' },
     ].map((item) => (<button key={item.id} onClick={() => { setView(item.id); setSidebarOpen(false); if (item.id !== 'detail') setSelectedJid(null); }}
@@ -219,11 +244,12 @@ export default function WhatsAppAgent() {
   </div>);
 
   // ==================== CONVERSATION ROW ====================
-  const ConversationRow = ({ conv: c, onClick }) => (<button onClick={onClick} className="w-full p-4 flex items-center gap-3 hover:bg-gray-50 transition-colors text-left">
-    <div className="relative flex-shrink-0"><div className={`w-10 h-10 rounded-full ${c.avatar_color} flex items-center justify-center text-white text-xs font-bold`}>{c.avatar_initials}</div>
+  const ConversationRow = ({ conv: c, onClick, onStarClick }) => (<button onClick={onClick} className="w-full p-4 flex items-center gap-3 hover:bg-gray-50 transition-colors text-left">
+    <div className="relative flex-shrink-0"><div className={`w-10 h-10 rounded-full ${c.avatar_color} flex items-center justify-center text-white text-xs font-bold`}>{getInitialsFor(c)}</div>
     {c.unread_count > 0 && <span className="absolute -top-1 -right-1 bg-emerald-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center">{c.unread_count}</span>}</div>
     <div className="flex-1 min-w-0">
-      <div className="flex items-center gap-2"><p className="font-medium text-sm text-gray-900 truncate">{c.name}</p>
+      <div className="flex items-center gap-2"><p className="font-medium text-sm text-gray-900 truncate">{getName(c)}</p>
+      {c.starred && <svg className="w-4 h-4 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>}
       {c.priority === 'high' && <span className="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700">Urgent</span>}
       {c.unread_count > 0 && <span className="bg-emerald-500 text-white text-xs px-1.5 py-0.5 rounded-full">{c.unread_count}</span>}</div>
       <p className="text-xs text-gray-500 truncate">{c.last_message || 'Aucun message'}</p>
@@ -238,23 +264,131 @@ export default function WhatsAppAgent() {
   </button>);
 
   // ==================== DASHBOARD ====================
-  const Dashboard = () => { const svaConvs = conversations.filter(c => c.status !== 'hsva'); const urgents = svaConvs.filter(c => c.priority === 'high'); const stale = svaConvs.filter(c => daysSince(c.last_activity_at) >= 3);
+  const Dashboard = () => {
     const statusCounts = { client: conversations.filter(c => c.status === 'client').length, assurance: conversations.filter(c => c.status === 'assurance').length, prospect: conversations.filter(c => c.status === 'prospect').length };
-    return (<div className="space-y-6">
-    <div><h2 className="text-2xl font-bold text-gray-900">Dashboard</h2><p className="text-gray-500 text-sm mt-1">Vue d'ensemble</p></div>
-    {!connected && !connecting && <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between"><div className="flex items-center gap-3"><Icon name="wifi" className="w-5 h-5 text-amber-500" /><div><p className="font-semibold text-amber-800 text-sm">WhatsApp non connecté</p><p className="text-amber-600 text-xs">Connecte-toi pour recevoir les messages</p></div></div><button onClick={() => setView('settings')} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm hover:bg-emerald-600">Connecter</button></div>}
-    {urgents.length > 0 && <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3"><Icon name="alert" className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" /><div><p className="font-semibold text-red-800 text-sm">{urgents.length} urgente{urgents.length>1?'s':''}</p><p className="text-red-600 text-xs mt-0.5">{urgents.map(c=>c.name).join(', ')}</p></div></div>}
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-      {[{ label:'Client', val: statusCounts.client, bg:'bg-emerald-50', color:'text-emerald-700', border:'border-emerald-200', click:()=>{setActiveLabel('client');setView('conversations');} },
-        { label:'Assurance', val: statusCounts.assurance, bg:'bg-blue-50', color:'text-blue-700', border:'border-blue-200', click:()=>{setActiveLabel('assurance');setView('conversations');} },
-        { label:'Prospect', val: statusCounts.prospect, bg:'bg-purple-50', color:'text-purple-700', border:'border-purple-200', click:()=>{setActiveLabel('prospect');setView('conversations');} },
-        { label:'Docs en attente', val: stats.pending_docs||0, bg:'bg-amber-50', color:'text-amber-700', border:'border-amber-200', click:()=>setView('documents') }
-      ].map(s => (<div key={s.label} onClick={s.click} className={`bg-white rounded-xl border ${s.border} p-4 cursor-pointer hover:shadow-sm`}><div className="flex items-center gap-3"><div className={`w-10 h-10 rounded-lg ${s.bg} flex items-center justify-center`}><span className={`font-bold text-sm ${s.color}`}>{s.label[0]}</span></div><div><p className={`text-2xl font-bold ${s.color}`}>{s.val}</p><p className="text-xs text-gray-500">{s.label}</p></div></div></div>))}
-    </div>
-    <div className="bg-white rounded-xl border border-gray-200"><div className="p-4 border-b border-gray-100 flex items-center justify-between"><h3 className="font-semibold text-gray-900">Activité récente</h3><button onClick={() => setView('conversations')} className="text-emerald-600 text-sm hover:underline">Tout voir</button></div>
-    <div className="divide-y divide-gray-50">{conversations.filter(c => c.status !== 'hsva').slice(0,6).map(c => <ConversationRow key={c.jid} conv={c} onClick={() => openConversation(c)} />)}{conversations.length === 0 && <div className="p-8 text-center text-gray-400 text-sm">{connected ? 'En attente...' : 'Connecte WhatsApp'}</div>}</div></div>
-    {stale.length > 0 && <div className="bg-amber-50 border border-amber-200 rounded-xl p-4"><h3 className="font-semibold text-amber-800 text-sm flex items-center gap-2"><Icon name="clock" className="w-4 h-4" /> À relancer</h3><div className="mt-3 space-y-2">{stale.map(c => (<button key={c.jid} onClick={() => openConversation(c)} className="w-full flex items-center gap-3 bg-white rounded-lg p-3 hover:shadow-sm text-left"><div className={`w-8 h-8 rounded-full ${c.avatar_color} flex items-center justify-center text-white text-xs font-bold`}>{c.avatar_initials}</div><div className="flex-1"><p className="text-sm font-medium text-gray-900">{c.name}</p><p className="text-xs text-amber-600">Inactif depuis {daysSince(c.last_activity_at)}j</p></div><Icon name="chevron" className="w-4 h-4 text-gray-400" /></button>))}</div></div>}
-  </div>); };
+    const [taskFilter, setTaskFilter] = useState(null);
+    const filteredTasks = taskFilter ? allTasks.filter(t => t.status === taskFilter) : allTasks;
+
+    // Reload tasks on mount if empty
+    useEffect(() => { if (allTasks.length === 0) loadAllTasks(); }, []);
+
+    return (
+      <div className="space-y-6">
+        <div><h2 className="text-2xl font-bold text-gray-900">Dashboard</h2><p className="text-gray-500 text-sm mt-1">Vue d'ensemble</p></div>
+
+        {/* WhatsApp connection alert */}
+        {!connected && !connecting && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between">
+            <div className="flex items-center gap-3"><Icon name="wifi" className="w-5 h-5 text-amber-500" /><div><p className="font-semibold text-amber-800 text-sm">WhatsApp non connecté</p><p className="text-amber-600 text-xs">Connecte-toi pour recevoir les messages</p></div></div>
+            <button onClick={() => setView('settings')} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm hover:bg-emerald-600">Connecter</button>
+          </div>
+        )}
+
+        {/* Quick stats */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {[{ label:'Client', val: statusCounts.client, bg:'bg-emerald-50', color:'text-emerald-700', border:'border-emerald-200', click:()=>{setActiveLabel('client');setView('conversations');} },
+            { label:'Assurance', val: statusCounts.assurance, bg:'bg-blue-50', color:'text-blue-700', border:'border-blue-200', click:()=>{setActiveLabel('assurance');setView('conversations');} },
+            { label:'Prospect', val: statusCounts.prospect, bg:'bg-purple-50', color:'text-purple-700', border:'border-purple-200', click:()=>{setActiveLabel('prospect');setView('conversations');} },
+            { label:'Tâches', val: allTasks.length, bg:'bg-amber-50', color:'text-amber-700', border:'border-amber-200', click:()=>{} }
+          ].map(s => (<div key={s.label} onClick={s.click} className={`bg-white rounded-xl border ${s.border} p-4 cursor-pointer hover:shadow-sm`}><div className="flex items-center gap-3"><div className={`w-10 h-10 rounded-lg ${s.bg} flex items-center justify-center`}><span className={`font-bold text-sm ${s.color}`}>{s.label[0]}</span></div><div><p className={`text-2xl font-bold ${s.color}`}>{s.val}</p><p className="text-xs text-gray-500">{s.label}</p></div></div></div>))}
+        </div>
+
+        {/* Section 1: Starred contacts */}
+        {starredConvs.length > 0 && (
+          <div className="space-y-3">
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2"><svg className="w-5 h-5 text-amber-500" fill="currentColor" viewBox="0 0 24 24"><path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg> Favoris ({starredConvs.length})</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {starredConvs.map(c => (
+                <button key={c.jid} onClick={() => openConversation(c)} className="bg-white rounded-xl border border-gray-200 p-4 hover:shadow-md transition-shadow text-left">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-12 h-12 rounded-full ${c.avatar_color} flex items-center justify-center text-white font-bold`}>{getInitialsFor(c)}</div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-900 truncate">{getName(c)}</p>
+                      <p className={`text-xs ${STATUSES[c.status]?.color || 'text-gray-500'}`}>{STATUSES[c.status]?.label || c.status}</p>
+                    </div>
+                    <svg className="w-5 h-5 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2 truncate">{c.last_message || 'Aucun message'}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Section 2: All Tasks Table */}
+        <div className="bg-white rounded-xl border border-gray-200">
+          <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+            <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Icon name="tasks" className="w-5 h-5 text-blue-500" /> Tâches Notion</h3>
+            <button onClick={loadAllTasks} disabled={loadingAllTasks} className="text-blue-600 text-sm hover:underline">{loadingAllTasks ? 'Chargement...' : 'Actualiser'}</button>
+          </div>
+          {/* Filter tabs */}
+          <div className="flex gap-2 p-3 border-b border-gray-100 overflow-x-auto">
+            {[{id:null,label:'Toutes'},{id:'À faire',label:'À faire'},{id:'En cours',label:'En cours'},{id:'En attente',label:'En attente'}].map(f => (
+              <button key={f.id||'all'} onClick={() => setTaskFilter(f.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap ${taskFilter === f.id ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>{f.label}</button>
+            ))}
+          </div>
+          {loadingAllTasks ? (
+            <div className="p-8 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto" /></div>
+          ) : filteredTasks.length === 0 ? (
+            <div className="p-8 text-center text-gray-400 text-sm">Aucune tâche</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="text-left px-4 py-3 font-medium text-gray-600">Tâche</th>
+                    <th className="text-left px-4 py-3 font-medium text-gray-600">Contact</th>
+                    <th className="text-left px-4 py-3 font-medium text-gray-600">Dossier</th>
+                    <th className="text-left px-4 py-3 font-medium text-gray-600">Projet</th>
+                    <th className="text-left px-4 py-3 font-medium text-gray-600">Statut</th>
+                    <th className="text-left px-4 py-3 font-medium text-gray-600">Échéance</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {filteredTasks.slice(0, 20).map(t => (
+                    <tr key={t.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <a href={t.url} target="_blank" rel="noopener" className="text-gray-900 hover:text-blue-600 hover:underline font-medium">{t.name}</a>
+                      </td>
+                      <td className="px-4 py-3">
+                        {t.contact ? (
+                          <button onClick={() => { const c = conversations.find(cv => cv.jid === t.contact.jid); if (c) openConversation(c); }} className="flex items-center gap-2 hover:underline">
+                            <div className={`w-6 h-6 rounded-full ${t.contact.avatar_color} flex items-center justify-center text-white text-xs font-bold`}>{t.contact.avatar_initials}</div>
+                            <span className="text-gray-700">{t.contact.name}</span>
+                          </button>
+                        ) : <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        {t.dossier ? (
+                          <a href={t.dossier.url} target="_blank" rel="noopener" className="text-gray-600 hover:text-blue-600 hover:underline">{t.dossier.name}</a>
+                        ) : <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        {t.project ? (
+                          <a href={t.project.url} target="_blank" rel="noopener" className="text-gray-600 hover:text-blue-600 hover:underline">{t.project.name}</a>
+                        ) : <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs px-2 py-1 rounded-full ${t.status === 'En cours' ? 'bg-blue-100 text-blue-700' : t.status === 'À faire' ? 'bg-gray-100 text-gray-700' : 'bg-amber-100 text-amber-700'}`}>{t.status || '—'}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {t.date ? (
+                          <span className={`text-xs ${t.dateStatus === 'overdue' ? 'text-red-600 font-medium' : t.dateStatus === 'today' ? 'text-orange-600 font-medium' : 'text-gray-500'}`}>
+                            {new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}
+                          </span>
+                        ) : <span className="text-gray-400">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {filteredTasks.length > 20 && <div className="p-3 text-center text-xs text-gray-400">+{filteredTasks.length - 20} autres tâches</div>}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   // ==================== KANBAN ====================
   const Kanban = () => (<div className="space-y-4">
@@ -263,7 +397,7 @@ export default function WhatsAppAgent() {
       <div key={status} className="flex-shrink-0 w-72 lg:flex-1 lg:min-w-0" onDragOver={e => e.preventDefault()} onDrop={() => { if (draggedCard) { updateStatus(draggedCard, status); setDraggedCard(null); } }}>
       <div className={`rounded-xl bg-gray-50 border border-gray-200 border-t-4 ${info.kanban}`}><div className="p-3 flex items-center gap-2"><span className="font-semibold text-sm text-gray-700">{info.label}</span><span className="bg-gray-200 text-gray-600 text-xs px-1.5 py-0.5 rounded-full">{items.length}</span></div>
       <div className="p-2 space-y-2 min-h-[100px]">{items.map(c => (<div key={c.jid} draggable onDragStart={() => setDraggedCard(c.jid)} onClick={() => openConversation(c)} className="bg-white rounded-lg border border-gray-200 p-3 cursor-pointer hover:shadow-md transition-shadow">
-        <div className="flex items-start gap-2.5"><div className={`w-8 h-8 rounded-full ${c.avatar_color} flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}>{c.avatar_initials}</div><div className="flex-1 min-w-0"><div className="flex items-center gap-1.5"><p className="font-medium text-sm text-gray-900 truncate">{c.name}</p>{c.priority==='high' && <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />}</div><p className="text-xs text-gray-500 truncate mt-0.5">{c.last_message}</p></div></div>
+        <div className="flex items-start gap-2.5"><div className={`w-8 h-8 rounded-full ${c.avatar_color} flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}>{getInitialsFor(c)}</div><div className="flex-1 min-w-0"><div className="flex items-center gap-1.5"><p className="font-medium text-sm text-gray-900 truncate">{getName(c)}</p>{c.priority==='high' && <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />}</div><p className="text-xs text-gray-500 truncate mt-0.5">{c.last_message}</p></div></div>
         <div className="mt-2 flex items-center gap-1.5 flex-wrap">{c.labels?.map(l => (<span key={l} className={`text-xs px-1.5 py-0.5 rounded-full border ${getLabelColor(l)}`}>{l}</span>))}{(c.tags||[]).map(tag => (<span key={tag} className="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">{tag}</span>))}{(c.tags||[]).length===0 && <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{c.category}</span>}{(c.document_count||0)>0 && <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 flex items-center gap-1"><Icon name="clip" className="w-3 h-3" /> {c.document_count}</span>}{c.unread_count>0 && <span className="text-xs px-1.5 py-0.5 rounded-full bg-emerald-500 text-white">{c.unread_count}</span>}</div>
         <p className="text-xs text-gray-400 mt-2">{timeAgo(c.last_message_time)}</p>
       </div>))}</div></div></div>); })}</div>
@@ -285,7 +419,7 @@ export default function WhatsAppAgent() {
       else if (activeLabel === 'assurance') base = conversations.filter(c => c.status === 'assurance');
       else if (activeLabel === 'prospect') base = conversations.filter(c => c.status === 'prospect');
       else if (activeLabel === 'hsva') base = conversations.filter(c => c.status === 'hsva');
-      return base.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()) || (c.last_message||'').toLowerCase().includes(searchQuery.toLowerCase()));
+      return base.filter(c => getName(c).toLowerCase().includes(searchQuery.toLowerCase()) || (c.last_message||'').toLowerCase().includes(searchQuery.toLowerCase()));
     };
     const filtered = getFiltered();
     const tabs = [{ id:'tous', label:'Tous', count:svaConvs.length, activeBg:'bg-gray-900 text-white' }, { id:'client', label:'Client', count:statusCounts.client, activeBg:'bg-emerald-600 text-white' }, { id:'assurance', label:'Assurance', count:statusCounts.assurance, activeBg:'bg-blue-600 text-white' }, { id:'prospect', label:'Prospect', count:statusCounts.prospect, activeBg:'bg-purple-600 text-white' }, { id:'hsva', label:'HSVA', count:statusCounts.hsva, activeBg:'bg-orange-500 text-white' }];
@@ -297,235 +431,310 @@ export default function WhatsAppAgent() {
       <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-50">{filtered.map(c => <ConversationRow key={c.jid} conv={c} onClick={() => openConversation(c)} />)}{filtered.length === 0 && <div className="p-8 text-center text-gray-400 text-sm">{conversations.length===0?(connected?'Aucune conv avec cette étiquette':'Connecte WhatsApp'):'Aucun résultat'}</div>}</div>
     </div>); };
 
-  // ==================== DETAIL ====================
-  const Detail = () => { if (!selectedConv) return <div className="p-8 text-center text-gray-400">Chargement...</div>;
+  // ==================== DETAIL (2-column layout) ====================
+  const Detail = () => {
+    if (!selectedConv) return <div className="p-8 text-center text-gray-400">Chargement...</div>;
     const c = selectedConv;
-    return (<div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <button onClick={() => { setView('conversations'); setSelectedJid(null); }} className="p-2 hover:bg-gray-100 rounded-lg"><Icon name="back" className="w-5 h-5 text-gray-600" /></button>
-        <div className={`w-10 h-10 rounded-full ${c.avatar_color} flex items-center justify-center text-white text-sm font-bold`}>{c.avatar_initials}</div>
-        <div className="flex-1">{editingName ? (<div className="flex items-center gap-2"><input type="text" value={editNameValue} onChange={e => setEditNameValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') updateName(c.jid, editNameValue); if (e.key === 'Escape') setEditingName(false); }} className="font-bold text-gray-900 bg-white border border-gray-300 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-48" autoFocus /><button onClick={() => updateName(c.jid, editNameValue)} className="text-emerald-600 text-xs hover:underline">✓</button><button onClick={() => setEditingName(false)} className="text-gray-400 text-xs hover:text-gray-600">✕</button></div>) : (<h2 className="font-bold text-gray-900 flex items-center gap-1.5 cursor-pointer group" onClick={() => { setEditNameValue(c.name); setEditingName(true); }}>{c.name} <Icon name="edit" className="w-3.5 h-3.5 text-gray-300 group-hover:text-gray-500" /></h2>)}{editingPhone ? (<div className="flex items-center gap-1"><input type="tel" value={editPhoneValue} onChange={e => setEditPhoneValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') updatePhone(c.jid, editPhoneValue); if (e.key === 'Escape') setEditingPhone(false); }} className="text-xs px-1.5 py-0.5 rounded border border-gray-300 bg-white w-36 focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="+33 6 12 34 56 78" autoFocus /><button onClick={() => updatePhone(c.jid, editPhoneValue)} className="text-emerald-600 text-xs">✓</button><button onClick={() => setEditingPhone(false)} className="text-gray-400 text-xs">✕</button></div>) : (<p className="text-xs text-gray-500 cursor-pointer hover:text-gray-700 group flex items-center gap-1" onClick={() => { setEditPhoneValue(c.phone || ''); setEditingPhone(true); }}><span className="group-hover:underline">{c.phone || 'Ajouter téléphone'}</span></p>)}</div>
-        <select value={c.priority} onChange={e => updatePriority(c.jid, e.target.value)} className={`text-xs px-2 py-1 rounded border mr-1 ${c.priority==='high'?'bg-red-100 text-red-700 border-red-200':c.priority==='medium'?'bg-amber-100 text-amber-700 border-amber-200':'bg-gray-100 text-gray-700 border-gray-200'}`}><option value="low">Basse</option><option value="medium">Moyenne</option><option value="high">Urgente</option></select>
-        <select value={c.status} onChange={e => updateStatus(c.jid, e.target.value)} className={`text-xs px-3 py-1.5 rounded-full border font-medium ${STATUSES[c.status]?.color||''}`}>{Object.entries(STATUSES).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}</select>
-      </div>
-      <div className="flex items-center gap-2 flex-wrap"><span className="text-xs text-gray-500">Tags :</span>{CATEGORIES.map(tag => { const isActive = (c.tags || []).includes(tag); return (<button key={tag} onClick={() => toggleTag(c.jid, tag, c.tags)} className={`text-xs px-2 py-1 rounded-full border transition-colors ${isActive ? 'bg-emerald-100 text-emerald-700 border-emerald-300' : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'}`}>{isActive && '✓ '}{tag}</button>); })}
-        <span className="text-xs text-gray-500 ml-4">Email :</span>{editingEmail ? (<div className="flex items-center gap-1"><input type="email" value={editEmailValue} onChange={e => setEditEmailValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') updateEmail(c.jid, editEmailValue); if (e.key === 'Escape') setEditingEmail(false); }} className="text-xs px-2 py-1 rounded border border-gray-300 bg-white w-48 focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="email@exemple.com" autoFocus /><button onClick={() => updateEmail(c.jid, editEmailValue)} className="text-emerald-600 text-xs">✓</button><button onClick={() => setEditingEmail(false)} className="text-gray-400 text-xs">✕</button></div>) : (<button onClick={() => { setEditEmailValue(c.email || ''); setEditingEmail(true); }} className="text-xs text-blue-600 hover:underline">{c.email || '+ Ajouter'}</button>)}
-        <button onClick={syncToNotion} disabled={notionLoading} className="ml-auto px-3 py-1.5 bg-gray-900 text-white text-xs rounded-lg hover:bg-gray-800 disabled:opacity-50 font-medium flex items-center gap-1.5"><span className="font-bold">N</span> Sync Notion</button>
-      </div>
-      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">{editingNotes ? (<div className="space-y-2"><textarea value={notesText} onChange={e => setNotesText(e.target.value)} rows={3} className="w-full p-2 text-sm border border-amber-300 rounded bg-white focus:outline-none focus:ring-2 focus:ring-amber-400" placeholder="Notes..." /><div className="flex gap-2"><button onClick={() => saveNotes(c.jid)} className="px-3 py-1 bg-amber-500 text-white text-xs rounded hover:bg-amber-600">Sauver</button><button onClick={() => setEditingNotes(false)} className="px-3 py-1 bg-gray-200 text-gray-700 text-xs rounded">Annuler</button></div></div>) : (<button onClick={() => { setNotesText(c.notes||''); setEditingNotes(true); }} className="w-full text-left text-sm text-amber-800">📝 {c.notes||'Ajouter des notes...'}</button>)}</div>
-      <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
-        {notionSuccess && <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-sm text-emerald-700 flex items-center gap-2"><Icon name="check" className="w-4 h-4" /> {notionSuccess}</div>}
-        {c.notion_dossier_id ? (<div className="flex items-center gap-3"><div className="w-8 h-8 rounded-lg bg-gray-900 flex items-center justify-center text-white text-xs font-bold">N</div><div className="flex-1 min-w-0"><p className="text-sm font-medium text-gray-900 truncate">{c.notion_dossier_name}</p><a href={c.notion_dossier_url} target="_blank" rel="noopener" className="text-xs text-blue-600 hover:underline">Ouvrir ↗</a></div><div className="flex gap-1.5"><button onClick={() => { setShowCreateTask(true); setShowCreateOpp(false); }} className="px-3 py-1.5 bg-blue-500 text-white text-xs rounded-lg hover:bg-blue-600 font-medium">+ Tâche</button><button onClick={() => { setShowCreateOpp(true); setShowCreateTask(false); }} className="px-3 py-1.5 bg-purple-500 text-white text-xs rounded-lg hover:bg-purple-600 font-medium">+ Projet</button></div></div>) : (!showNotionLink ? (<button onClick={() => { setShowNotionLink(true); searchDossiers(''); }} className="w-full flex items-center gap-3 py-2 px-3 bg-gray-50 border border-dashed border-gray-300 rounded-lg hover:border-gray-400 hover:bg-gray-100 transition-colors"><div className="w-8 h-8 rounded-lg bg-gray-200 flex items-center justify-center text-gray-500 text-xs font-bold">N</div><span className="text-sm text-gray-500">Lier à un dossier Notion...</span></button>) : (<div className="space-y-2"><div className="flex items-center gap-2"><input type="text" placeholder="Rechercher un dossier..." value={notionSearch} onChange={e => { setNotionSearch(e.target.value); searchDossiers(e.target.value); }} className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" autoFocus /><button onClick={() => setShowNotionLink(false)} className="text-xs text-gray-400 hover:text-gray-600 px-2">Annuler</button></div><div className="max-h-48 overflow-y-auto space-y-1">{notionSearching && <p className="text-xs text-gray-400 text-center py-2">Recherche...</p>}{!notionSearching && notionError && <div className="text-xs text-red-500 text-center py-2">⚠️ {notionError}</div>}{!notionSearching && !notionError && notionResults.length===0 && <p className="text-xs text-gray-400 text-center py-2">Aucun résultat</p>}{notionResults.map(d => (<button key={d.id} onClick={() => linkDossier(d)} disabled={notionLoading} className="w-full text-left px-3 py-2 rounded-lg hover:bg-blue-50 border border-transparent hover:border-blue-200 flex items-center gap-2"><div className="w-6 h-6 rounded bg-gray-900 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">N</div><span className="text-sm text-gray-800 truncate">{d.name}</span>{d.phone && <span className="text-xs text-gray-400 flex-shrink-0">{d.phone}</span>}</button>))}</div></div>))}
-        {showCreateTask && c.notion_dossier_id && (<div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2"><div className="flex items-center justify-between"><p className="text-sm font-semibold text-blue-800">Nouvelle tâche</p><button onClick={() => setShowCreateTask(false)} className="text-xs text-blue-400 hover:text-blue-600">✕</button></div>
-          {dossierProjects.length > 0 && (<div><label className="text-xs text-blue-600 font-medium">Lier à un projet existant :</label><select value={taskForm.projectId} onChange={e => setTaskForm({...taskForm, projectId: e.target.value})} className="w-full mt-1 px-3 py-2 text-sm border border-blue-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"><option value="">— Aucun projet —</option>{dossierProjects.map(p => (<option key={p.id} value={p.id}>{p.type === 'Lead' ? '🩷' : p.type === 'Sinistre' ? '🔵' : '🟢'} {p.name} {p.niveau ? `(${p.niveau})` : ''}</option>))}</select></div>)}
-          <input type="text" placeholder="Nom de la tâche..." value={taskForm.name} onChange={e => setTaskForm({...taskForm, name: e.target.value})} className="w-full px-3 py-2 text-sm border border-blue-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" autoFocus />
-          {c.notion_dossier_name && <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-100 rounded-lg px-2 py-1"><span className="font-bold">📁 Dossier :</span> {c.notion_dossier_name}</div>}
-          <div className="flex gap-2"><select value={taskForm.priority} onChange={e => setTaskForm({...taskForm, priority: e.target.value})} className="flex-1 px-2 py-1.5 text-xs border border-blue-200 rounded-lg bg-white"><option value="Urg & Imp">🔴 Urg & Imp</option><option value="Important">🟠 Important</option><option value="Urgent">🟡 Urgent</option><option value="Secondaire">⚪ Secondaire</option><option value="En attente">🔵 En attente</option><option value="À prioriser">⬜ À prioriser</option></select><input type="date" value={taskForm.date} onChange={e => setTaskForm({...taskForm, date: e.target.value})} className="flex-1 px-2 py-1.5 text-xs border border-blue-200 rounded-lg bg-white" /></div>
-          <button onClick={createTask} disabled={notionLoading||!taskForm.name} className="w-full py-2 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 disabled:opacity-50 font-medium">{notionLoading?'Création...':'✓ Créer la tâche'}</button></div>)}
-        {showCreateOpp && c.notion_dossier_id && (<div className="bg-purple-50 border border-purple-200 rounded-lg p-3 space-y-2"><div className="flex items-center justify-between"><p className="text-sm font-semibold text-purple-800">Nouveau projet</p><button onClick={() => setShowCreateOpp(false)} className="text-xs text-purple-400 hover:text-purple-600">✕</button></div>
-          <input type="text" placeholder="Nom du projet..." value={projectForm.name} onChange={e => setProjectForm({...projectForm, name: e.target.value})} className="w-full px-3 py-2 text-sm border border-purple-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-purple-400" autoFocus />
-          {c.notion_dossier_name && <div className="flex items-center gap-2 text-xs text-purple-600 bg-purple-100 rounded-lg px-2 py-1"><span className="font-bold">📁 Dossier :</span> {c.notion_dossier_name}</div>}
-          <div className="flex gap-2"><select value={projectForm.type} onChange={e => setProjectForm({...projectForm, type: e.target.value})} className="flex-1 px-2 py-1.5 text-xs border border-purple-200 rounded-lg bg-white"><option value="Lead">🩷 Lead</option><option value="Sinistre">🔵 Sinistre</option><option value="Gestion">🟢 Gestion</option></select><select value={projectForm.priority} onChange={e => setProjectForm({...projectForm, priority: e.target.value})} className="flex-1 px-2 py-1.5 text-xs border border-purple-200 rounded-lg bg-white"><option value="Urg & imp">🔴 Urg & imp</option><option value="Important">🟠 Important</option><option value="Urgent">🟡 Urgent</option><option value="Secondaire">⚪ Secondaire</option><option value="En attente">🔵 En attente</option><option value="À prioriser">⬜ À prioriser</option></select></div>
-          <select value={projectForm.niveau} onChange={e => setProjectForm({...projectForm, niveau: e.target.value})} className="w-full px-2 py-1.5 text-xs border border-purple-200 rounded-lg bg-white"><option value="">Niveau du projet...</option><option value="Devis à faire">Devis à faire</option><option value="En attente d'information">En attente d&apos;info</option><option value="Envoyé au client">Envoyé au client</option><option value="En attente de signature">En attente de signature</option></select>
-          <button onClick={createProject} disabled={notionLoading||!projectForm.name} className="w-full py-2 bg-purple-500 text-white text-sm rounded-lg hover:bg-purple-600 disabled:opacity-50 font-medium">{notionLoading?'Création...':'✓ Créer le projet'}</button></div>)}
-      </div>
-      <div className="flex gap-1 bg-gray-100 p-1 rounded-lg">{[{id:'messages',label:'Messages',icon:'message'},{id:'documents',label:`Documents (${selectedDocs.length})`,icon:'file'},{id:'notion',label:'Notion',icon:'notion',disabled:!c.notion_dossier_id}].map(t => (<button key={t.id} onClick={() => { setDetailTab(t.id); if (t.id === 'notion' && c.notion_dossier_id) loadDossierOverview(c.notion_dossier_id); }} disabled={t.disabled} className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-sm font-medium ${detailTab===t.id?'bg-white text-gray-900 shadow-sm':t.disabled?'text-gray-300 cursor-not-allowed':'text-gray-500 hover:text-gray-700'}`}><Icon name={t.icon} className="w-4 h-4" /> {t.label}</button>))}</div>
-      {detailTab === 'messages' && (<div className="space-y-3"><div className="bg-[#e5ddd5] rounded-xl border border-gray-200 p-4 space-y-2 max-h-[400px] overflow-y-auto" style={{backgroundImage:'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyBAMAAADsEZWCAAAAG1BMVEXd2tfd2tfd2tfd2tfd2tfd2tfd2tfd2tfd2tcEcYl5AAAACXRSTlMABAgMEBQYHCAk1OKnAAAAP0lEQVQ4y2NgGAWjYBSMgsENGP8TBIx/EQSMfxEE/+8iBhj/IggY/yIIGP8iBv4iBBj/IgQY/yIEGP8OUgAAAPsED0TzS7oAAAAASUVORK5CYII=")'}}>
-        {selectedMessages.map(msg => (<div key={msg.id} className={`flex ${msg.from_me?'justify-end':'justify-start'}`}>
-          <div className={`max-w-[75%] px-3 py-2 rounded-lg text-sm shadow-sm ${msg.from_me?'bg-[#dcf8c6] text-gray-800 rounded-tr-none':'bg-white text-gray-800 rounded-tl-none'} ${msg.is_document?'border-l-4 '+(msg.from_me?'border-emerald-500':'border-blue-400'):''}`}>
-            {!msg.from_me && <p className="text-xs font-semibold text-emerald-600 mb-1">{msg.sender_name || selected?.name || 'Contact'}</p>}
-            {msg.media_url && msg.media_mimetype?.startsWith('image/') && <a href={msg.media_url} target="_blank" rel="noopener" className="block mb-1"><img src={msg.media_url} alt="" className="rounded-lg max-w-full max-h-64 cursor-pointer" loading="lazy" /></a>}
-            {msg.media_url && msg.media_mimetype?.startsWith('video/') && <video src={msg.media_url} controls className="rounded-lg max-w-full max-h-64 mb-1" preload="metadata" />}
-            {msg.media_url && msg.media_mimetype?.startsWith('audio/') && <audio src={msg.media_url} controls className="mb-1 w-full" preload="metadata" />}
-            {msg.media_url && !msg.media_mimetype?.startsWith('image/') && !msg.media_mimetype?.startsWith('video/') && !msg.media_mimetype?.startsWith('audio/') && (<button onClick={() => setPreviewDoc({url:msg.media_url,filename:msg.text?.replace('📎 ','')||'Document',mimetype:msg.media_mimetype})} className="flex items-center gap-2 mb-1 p-2 rounded-lg w-full text-left bg-gray-50 hover:bg-gray-100 border border-gray-200"><div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${msg.media_mimetype?.includes('pdf')?'bg-red-100':'bg-blue-100'}`}><span className="text-xs font-bold" style={{color:msg.media_mimetype?.includes('pdf')?'#ef4444':'#3b82f6'}}>{msg.media_mimetype?.includes('pdf')?'PDF':'DOC'}</span></div><div className="flex-1 min-w-0"><p className="text-xs font-medium truncate text-gray-900">{msg.text?.replace('📎 ','')||'Document'}</p><p className="text-xs text-gray-400">Cliquer pour voir</p></div></button>)}
-            {!msg.media_url && msg.is_document && (<div className="flex items-center gap-2 p-2 rounded-lg bg-gray-50 border border-gray-200"><div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-red-100"><span className="text-xs font-bold text-red-500">PDF</span></div><div className="flex-1 min-w-0"><p className="text-xs font-medium truncate text-gray-900">{msg.text?.replace('📎 ','')||'Document'}</p><p className="text-xs text-gray-400">En attente...</p></div></div>)}
-            {!msg.is_document && <p className="whitespace-pre-wrap">{msg.text}</p>}
-            <div className="flex items-center justify-end gap-1 mt-1">
-              <span className="text-[10px] text-gray-500">{new Date(msg.timestamp).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</span>
-              {msg.from_me && <svg className="w-4 h-4 text-blue-500" viewBox="0 0 16 15" fill="currentColor"><path d="M15.01 3.316l-.478-.372a.365.365 0 0 0-.51.063L8.666 9.88a.32.32 0 0 1-.484.032l-.358-.325a.32.32 0 0 0-.484.032l-.378.48a.418.418 0 0 0 .036.54l1.32 1.267a.32.32 0 0 0 .484-.034l6.272-8.048a.366.366 0 0 0-.064-.512zm-4.1 0l-.478-.372a.365.365 0 0 0-.51.063L4.566 9.88a.32.32 0 0 1-.484.032L1.892 7.77a.366.366 0 0 0-.516.005l-.423.433a.364.364 0 0 0 .006.514l3.255 3.185a.32.32 0 0 0 .484-.033l6.272-8.048a.365.365 0 0 0-.063-.51z"/></svg>}
-            </div>
+    const TAG_COLORS = { Gestion: { bg: 'bg-green-100', text: 'text-green-700', border: 'border-green-300', full: 'bg-green-500 text-white' }, Sinistre: { bg: 'bg-red-100', text: 'text-red-700', border: 'border-red-300', full: 'bg-red-500 text-white' }, Lead: { bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-300', full: 'bg-purple-500 text-white' } };
+
+    // Get task date status
+    const getDateStatus = (date) => {
+      if (!date) return null;
+      const today = new Date().toISOString().split('T')[0];
+      if (date < today) return 'overdue';
+      if (date === today) return 'today';
+      return null;
+    };
+
+    return (
+      <div className="h-full flex flex-col">
+        {/* Header */}
+        <div className="flex items-center gap-3 pb-4 border-b border-gray-200 mb-4">
+          <button onClick={() => { setView('conversations'); setSelectedJid(null); }} className="p-2 hover:bg-gray-100 rounded-lg"><Icon name="back" className="w-5 h-5 text-gray-600" /></button>
+          <div className={`w-10 h-10 rounded-full ${c.avatar_color} flex items-center justify-center text-white text-sm font-bold`}>{getInitialsFor(c)}</div>
+          <div className="flex-1 min-w-0">
+            {editingName ? (
+              <div className="flex items-center gap-2">
+                <input type="text" value={editNameValue} onChange={e => setEditNameValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') updateName(c.jid, editNameValue); if (e.key === 'Escape') setEditingName(false); }} className="font-bold text-gray-900 bg-white border border-gray-300 rounded px-2 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 w-48" autoFocus />
+                <button onClick={() => updateName(c.jid, editNameValue)} className="text-emerald-600 text-xs hover:underline">✓</button>
+                <button onClick={() => setEditingName(false)} className="text-gray-400 text-xs hover:text-gray-600">✕</button>
+              </div>
+            ) : (
+              <h2 className="font-bold text-gray-900 flex items-center gap-1.5 cursor-pointer group" onClick={() => { setEditNameValue(c.custom_name || c.whatsapp_name || getName(c)); setEditingName(true); }}>{getName(c)} <Icon name="edit" className="w-3.5 h-3.5 text-gray-300 group-hover:text-gray-500" /></h2>
+            )}
+            {editingPhone ? (
+              <div className="flex items-center gap-1">
+                <input type="tel" value={editPhoneValue} onChange={e => setEditPhoneValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') updatePhone(c.jid, editPhoneValue); if (e.key === 'Escape') setEditingPhone(false); }} className="text-xs px-1.5 py-0.5 rounded border border-gray-300 bg-white w-36 focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="+33 6 12 34 56 78" autoFocus />
+                <button onClick={() => updatePhone(c.jid, editPhoneValue)} className="text-emerald-600 text-xs">✓</button>
+                <button onClick={() => setEditingPhone(false)} className="text-gray-400 text-xs">✕</button>
+              </div>
+            ) : (
+              <p className="text-xs text-gray-500 cursor-pointer hover:text-gray-700 group flex items-center gap-1" onClick={() => { setEditPhoneValue(c.phone || ''); setEditingPhone(true); }}><span className="group-hover:underline">{c.phone || 'Ajouter téléphone'}</span></p>
+            )}
           </div>
-        </div>))}
-        {selectedMessages.length===0 && <div className="text-center text-gray-400 text-sm py-4">Aucun message</div>}<div ref={messagesEndRef} />
-      </div>
-      {connected && <div className="flex gap-2"><input ref={messageInputRef} type="text" placeholder="Écrire..." defaultValue="" onKeyDown={e => e.key==='Enter' && sendMsg()} className="flex-1 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" /><button onClick={sendMsg} className="px-4 py-2.5 bg-emerald-500 text-white rounded-xl hover:bg-emerald-600"><Icon name="send" className="w-4 h-4" /></button></div>}
-      </div>)}
-      {detailTab === 'documents' && (<div className="space-y-2">{selectedDocs.length===0 ? (<div className="bg-white rounded-xl border border-gray-200 p-8 text-center"><Icon name="file" className="w-10 h-10 text-gray-300 mx-auto" /><p className="text-sm text-gray-500 mt-2">Aucun document</p></div>) : selectedDocs.map(doc => { const isPdf=doc.mimetype?.includes('pdf'); const isImage=doc.mimetype?.startsWith('image/'); const docUrl=doc.local_path?`/api/whatsapp/media/${encodeURIComponent(doc.local_path.split('/').pop())}`:null; return (<div key={doc.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        {docUrl && <button onClick={() => setPreviewDoc({url:docUrl,filename:doc.filename,mimetype:doc.mimetype})} className="w-full block hover:bg-gray-50">{isImage ? <div className="h-40 bg-gray-50 flex items-center justify-center overflow-hidden"><img src={docUrl} alt={doc.filename} className="max-h-full max-w-full object-contain" loading="lazy" /></div> : isPdf ? <div className="h-32 bg-gradient-to-br from-red-50 to-red-100 flex items-center justify-center"><div className="text-center"><div className="w-12 h-14 mx-auto bg-white rounded-lg shadow-sm border border-red-200 flex items-center justify-center"><span className="text-red-500 font-bold text-sm">PDF</span></div><p className="text-xs text-red-400 mt-2">Aperçu</p></div></div> : <div className="h-20 bg-gradient-to-br from-blue-50 to-blue-100 flex items-center justify-center"><Icon name="file" className="w-8 h-8 text-blue-400" /></div>}</button>}
-        <div className="p-3 flex items-center gap-3"><div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${isPdf?'bg-red-50':'bg-blue-50'}`}><Icon name={isPdf?'file':'image'} className={`w-4 h-4 ${isPdf?'text-red-500':'text-blue-500'}`} /></div><div className="flex-1 min-w-0"><p className="text-sm font-medium text-gray-900 truncate">{doc.filename}</p><p className="text-xs text-gray-400">{doc.file_size?`${(doc.file_size/1024).toFixed(0)} KB`:''} · {new Date(doc.created_at).toLocaleDateString('fr-FR')}</p></div><div className="flex items-center gap-2">{docUrl && <a href={docUrl} download={doc.filename} className="text-gray-400 hover:text-gray-600"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg></a>}<select value={doc.status} onChange={e => updateDocStatus(doc.id,e.target.value)} className={`text-xs px-2.5 py-1 rounded-full font-medium ${DOC_COLORS[doc.status]||''}`}>{Object.entries(DOC_STATUSES).map(([k,v]) => <option key={k} value={k}>{v}</option>)}</select></div></div>
-      </div>); })}</div>)}
-      {detailTab === 'notion' && c.notion_dossier_id && (
-        <div className="space-y-4">
-          {loadingOverview ? (
-            <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" /></div>
-          ) : !dossierOverview ? (
-            <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
-              <Icon name="notion" className="w-10 h-10 text-gray-300 mx-auto" />
-              <p className="text-sm text-gray-500 mt-2">Impossible de charger le dossier</p>
-              <button onClick={() => loadDossierOverview(c.notion_dossier_id)} className="mt-3 text-sm text-blue-600 hover:underline">Réessayer</button>
+          {/* Star button */}
+          <button onClick={() => toggleStar(c.jid, c.starred)} className={`p-2 rounded-lg transition-colors ${c.starred ? 'bg-amber-100 text-amber-500' : 'hover:bg-gray-100 text-gray-400'}`} title={c.starred ? 'Retirer des favoris' : 'Ajouter aux favoris'}>
+            <svg className="w-5 h-5" fill={c.starred ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
+          </button>
+          <select value={c.priority} onChange={e => updatePriority(c.jid, e.target.value)} className={`text-xs px-2 py-1 rounded border ${c.priority==='high'?'bg-red-100 text-red-700 border-red-200':c.priority==='medium'?'bg-amber-100 text-amber-700 border-amber-200':'bg-gray-100 text-gray-700 border-gray-200'}`}><option value="low">Basse</option><option value="medium">Moyenne</option><option value="high">Urgente</option></select>
+          <select value={c.status} onChange={e => updateStatus(c.jid, e.target.value)} className={`text-xs px-3 py-1.5 rounded-full border font-medium ${STATUSES[c.status]?.color||''}`}>{Object.entries(STATUSES).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}</select>
+        </div>
+
+        {/* Tags row */}
+        <div className="flex items-center gap-2 flex-wrap pb-4">
+          <span className="text-xs text-gray-500">Tags :</span>
+          {CATEGORIES.map(tag => {
+            const isActive = (c.tags || []).includes(tag);
+            const hasProject = c.tag_projects && c.tag_projects[tag];
+            const colors = TAG_COLORS[tag];
+            return (
+              <button key={tag} onClick={() => {
+                if (!isActive) { toggleTag(c.jid, tag, c.tags); }
+                else if (!c.notion_dossier_id) { alert('Liez d\'abord un dossier Notion'); }
+                else { setTagProjectModal({ tag, jid: c.jid }); }
+              }} className={`text-xs px-2 py-1 rounded-full border transition-colors ${isActive ? (hasProject ? colors.full : `${colors.bg} ${colors.text} ${colors.border}`) : 'bg-gray-50 text-gray-400 border-gray-200 border-dashed hover:bg-gray-100'}`}>
+                {isActive && (hasProject ? '✓ ' : '○ ')}{tag}
+              </button>
+            );
+          })}
+          <span className="text-xs text-gray-500 ml-4">Email :</span>
+          {editingEmail ? (
+            <div className="flex items-center gap-1">
+              <input type="email" value={editEmailValue} onChange={e => setEditEmailValue(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') updateEmail(c.jid, editEmailValue); if (e.key === 'Escape') setEditingEmail(false); }} className="text-xs px-2 py-1 rounded border border-gray-300 bg-white w-48 focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="email@exemple.com" autoFocus />
+              <button onClick={() => updateEmail(c.jid, editEmailValue)} className="text-emerald-600 text-xs">✓</button>
+              <button onClick={() => setEditingEmail(false)} className="text-gray-400 text-xs">✕</button>
             </div>
           ) : (
-            <>
-              {/* Dossier Header */}
-              <div className="bg-gradient-to-r from-gray-900 to-gray-800 rounded-xl p-4 text-white">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center">
-                      <span className="text-xl font-bold">N</span>
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-lg">{dossierOverview.dossier?.name}</h3>
-                      <p className="text-gray-400 text-sm">{dossierOverview.dossier?.category || 'Dossier'}</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    {dossierOverview.dossier?.driveUrl && (
-                      <a href={dossierOverview.dossier.driveUrl} target="_blank" rel="noopener" className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors" title="Google Drive">
-                        <Icon name="drive" className="w-4 h-4" />
-                      </a>
-                    )}
-                    <a href={dossierOverview.dossier?.url} target="_blank" rel="noopener" className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors" title="Ouvrir dans Notion">
-                      <Icon name="link" className="w-4 h-4" />
-                    </a>
-                  </div>
-                </div>
-                {/* Quick Stats */}
-                <div className="grid grid-cols-3 gap-3 mt-4">
-                  <div className="bg-white/10 rounded-lg p-3 text-center">
-                    <p className="text-2xl font-bold">{dossierOverview.projects?.active?.length || 0}</p>
-                    <p className="text-xs text-gray-400">Projets actifs</p>
-                  </div>
-                  <div className="bg-white/10 rounded-lg p-3 text-center">
-                    <p className="text-2xl font-bold">{dossierOverview.tasks?.pending?.length || 0}</p>
-                    <p className="text-xs text-gray-400">Tâches</p>
-                  </div>
-                  <div className="bg-white/10 rounded-lg p-3 text-center">
-                    <p className="text-2xl font-bold">{dossierOverview.contacts?.length || 0}</p>
-                    <p className="text-xs text-gray-400">Contacts</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Projects Section with Tasks */}
-              {(dossierOverview.projects?.active?.length > 0) && (
-                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                  <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-                    <h4 className="font-semibold text-gray-900 flex items-center gap-2"><Icon name="project" className="w-4 h-4 text-purple-500" /> Projets en cours</h4>
-                    <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">{dossierOverview.projects.active.length}</span>
-                  </div>
-                  <div className="divide-y divide-gray-50">
-                    {dossierOverview.projects.active.map(p => {
-                      const projectTasks = (dossierOverview.tasks?.pending || []).filter(t => t.projectId === p.id);
-                      const daysSinceCreation = p.createdAt ? Math.floor((Date.now() - new Date(p.createdAt).getTime()) / (1000 * 60 * 60 * 24)) : null;
-                      return (
-                        <div key={p.id} className="bg-white">
-                          <a href={p.url} target="_blank" rel="noopener" className="flex items-center gap-3 p-3 hover:bg-gray-50 transition-colors">
-                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${p.type === 'Lead' ? 'bg-pink-100' : p.type === 'Sinistre' ? 'bg-blue-100' : 'bg-green-100'}`}>
-                              <span className="text-lg">{p.type === 'Lead' ? '🩷' : p.type === 'Sinistre' ? '🔵' : '🟢'}</span>
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="font-medium text-sm text-gray-900 truncate">{p.name}</p>
-                              <div className="flex items-center gap-2 mt-0.5">
-                                <span className="text-xs text-gray-500">{p.type}</span>
-                                {p.niveau && <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{p.niveau}</span>}
-                                {daysSinceCreation !== null && <span className="text-xs text-gray-400">· {daysSinceCreation}j</span>}
-                              </div>
-                            </div>
-                            {p.priority && <span className={`text-xs px-2 py-1 rounded-full ${p.priority.includes('Urg') ? 'bg-red-100 text-red-700' : p.priority === 'Important' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-600'}`}>{p.priority}</span>}
-                            {projectTasks.length > 0 && <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{projectTasks.length}</span>}
-                            <Icon name="chevron" className="w-4 h-4 text-gray-400" />
-                          </a>
-                          {/* Tasks under project */}
-                          {projectTasks.length > 0 && (
-                            <div className="ml-6 border-l-2 border-gray-100 pl-4 pb-2">
-                              {projectTasks.map(t => (
-                                <a key={t.id} href={t.url} target="_blank" rel="noopener" className="flex items-center gap-2 py-1.5 px-2 hover:bg-gray-50 rounded-lg transition-colors">
-                                  <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : t.priority === 'Urgent' ? '🟡' : '⬜'}</span>
-                                  <span className="text-xs text-gray-700 flex-1 truncate">{t.name}</span>
-                                  {t.status && <span className="text-xs text-gray-400">{t.status}</span>}
-                                  {t.date && <span className="text-xs text-gray-400">{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
-                                </a>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Tasks without project */}
-              {(dossierOverview.tasks?.pending?.filter(t => !t.projectId || !dossierOverview.projects?.active?.some(p => p.id === t.projectId))?.length > 0) && (
-                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                  <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-                    <h4 className="font-semibold text-gray-900 flex items-center gap-2"><Icon name="tasks" className="w-4 h-4 text-blue-500" /> Autres tâches</h4>
-                    <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{dossierOverview.tasks.pending.filter(t => !t.projectId || !dossierOverview.projects?.active?.some(p => p.id === t.projectId)).length}</span>
-                  </div>
-                  <div className="divide-y divide-gray-50">
-                    {dossierOverview.tasks.pending.filter(t => !t.projectId || !dossierOverview.projects?.active?.some(p => p.id === t.projectId)).slice(0, 5).map(t => (
-                      <a key={t.id} href={t.url} target="_blank" rel="noopener" className="flex items-center gap-3 p-3 hover:bg-gray-50 transition-colors">
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${t.priority?.includes('Urg') ? 'bg-red-100' : t.priority === 'Important' ? 'bg-orange-100' : 'bg-gray-100'}`}>
-                          <span className="text-sm">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : t.priority === 'Urgent' ? '🟡' : '⬜'}</span>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm text-gray-900 truncate">{t.name}</p>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            {t.status && <span className="text-xs text-gray-500">{t.status}</span>}
-                            {t.date && <span className="text-xs text-gray-400">{new Date(t.date).toLocaleDateString('fr-FR')}</span>}
-                          </div>
-                        </div>
-                        <Icon name="chevron" className="w-4 h-4 text-gray-400" />
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Contacts Section */}
-              {(dossierOverview.contacts?.length > 0) && (
-                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                  <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-                    <h4 className="font-semibold text-gray-900 flex items-center gap-2"><Icon name="user" className="w-4 h-4 text-emerald-500" /> Contacts du dossier</h4>
-                    <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">{dossierOverview.contacts.length}</span>
-                  </div>
-                  <div className="divide-y divide-gray-50">
-                    {dossierOverview.contacts.map(contact => (
-                      <a key={contact.id} href={contact.url} target="_blank" rel="noopener" className="flex items-center gap-3 p-3 hover:bg-gray-50 transition-colors">
-                        <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-bold text-sm">
-                          {contact.name?.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '??'}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm text-gray-900 truncate">{contact.name}</p>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            {contact.phone && <span className="text-xs text-gray-500">{contact.phone}</span>}
-                            {contact.email && <span className="text-xs text-gray-400 truncate">{contact.email}</span>}
-                          </div>
-                        </div>
-                        <div className="flex gap-1 flex-wrap justify-end">
-                          {contact.statut?.slice(0, 2).map(s => (
-                            <span key={s} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{s}</span>
-                          ))}
-                        </div>
-                        <Icon name="chevron" className="w-4 h-4 text-gray-400" />
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Empty state */}
-              {(!dossierOverview.projects?.active?.length && !dossierOverview.tasks?.pending?.length && !dossierOverview.contacts?.length) && (
-                <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
-                  <Icon name="folder" className="w-10 h-10 text-gray-300 mx-auto" />
-                  <p className="text-sm text-gray-500 mt-2">Aucun projet, tâche ou contact lié à ce dossier</p>
-                </div>
-              )}
-            </>
+            <button onClick={() => { setEditEmailValue(c.email || ''); setEditingEmail(true); }} className="text-xs text-blue-600 hover:underline">{c.email || '+ Ajouter'}</button>
           )}
+          <button onClick={syncToNotion} disabled={notionLoading} className="ml-auto px-3 py-1.5 bg-gray-900 text-white text-xs rounded-lg hover:bg-gray-800 disabled:opacity-50 font-medium flex items-center gap-1.5"><span className="font-bold">N</span> Sync</button>
         </div>
-      )}
-    </div>); };
+
+        {/* 2-column layout */}
+        <div className="flex-1 flex gap-4 min-h-0">
+          {/* LEFT COLUMN: Messages (60%) */}
+          <div className="w-[60%] flex flex-col min-h-0">
+            {notionSuccess && <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-sm text-emerald-700 flex items-center gap-2 mb-2"><Icon name="check" className="w-4 h-4" /> {notionSuccess}</div>}
+            <div className="flex-1 bg-[#e5ddd5] rounded-xl border border-gray-200 p-4 space-y-2 overflow-y-auto" style={{backgroundImage:'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyBAMAAADsEZWCAAAAG1BMVEXd2tfd2tfd2tfd2tfd2tfd2tfd2tfd2tfd2tcEcYl5AAAACXRSTlMABAgMEBQYHCAk1OKnAAAAP0lEQVQ4y2NgGAWjYBSMgsENGP8TBIx/EQSMfxEE/+8iBhj/IggY/yIIGP8iBv4iBBj/IgQY/yIEGP8OUgAAAPsED0TzS7oAAAAASUVORK5CYII=")'}}>
+              {selectedMessages.map(msg => (
+                <div key={msg.id} className={`flex ${msg.from_me?'justify-end':'justify-start'}`}>
+                  <div className={`max-w-[75%] px-3 py-2 rounded-lg text-sm shadow-sm ${msg.from_me?'bg-[#dcf8c6] text-gray-800 rounded-tr-none':'bg-white text-gray-800 rounded-tl-none'} ${msg.is_document?'border-l-4 '+(msg.from_me?'border-emerald-500':'border-blue-400'):''}`}>
+                    {!msg.from_me && <p className="text-xs font-semibold text-emerald-600 mb-1">{msg.sender_name || getName(c) || 'Contact'}</p>}
+                    {msg.media_url && msg.media_mimetype?.startsWith('image/') && <a href={msg.media_url} target="_blank" rel="noopener" className="block mb-1"><img src={msg.media_url} alt="" className="rounded-lg max-w-full max-h-64 cursor-pointer" loading="lazy" /></a>}
+                    {msg.media_url && msg.media_mimetype?.startsWith('video/') && <video src={msg.media_url} controls className="rounded-lg max-w-full max-h-64 mb-1" preload="metadata" />}
+                    {msg.media_url && msg.media_mimetype?.startsWith('audio/') && <audio src={msg.media_url} controls className="mb-1 w-full" preload="metadata" />}
+                    {msg.media_url && !msg.media_mimetype?.startsWith('image/') && !msg.media_mimetype?.startsWith('video/') && !msg.media_mimetype?.startsWith('audio/') && (
+                      <button onClick={() => setPreviewDoc({url:msg.media_url,filename:msg.text?.replace('📎 ','')||'Document',mimetype:msg.media_mimetype})} className="flex items-center gap-2 mb-1 p-2 rounded-lg w-full text-left bg-gray-50 hover:bg-gray-100 border border-gray-200">
+                        <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${msg.media_mimetype?.includes('pdf')?'bg-red-100':'bg-blue-100'}`}><span className="text-xs font-bold" style={{color:msg.media_mimetype?.includes('pdf')?'#ef4444':'#3b82f6'}}>{msg.media_mimetype?.includes('pdf')?'PDF':'DOC'}</span></div>
+                        <div className="flex-1 min-w-0"><p className="text-xs font-medium truncate text-gray-900">{msg.text?.replace('📎 ','')||'Document'}</p><p className="text-xs text-gray-400">Cliquer pour voir</p></div>
+                      </button>
+                    )}
+                    {!msg.media_url && msg.is_document && (
+                      <div className="flex items-center gap-2 p-2 rounded-lg bg-gray-50 border border-gray-200">
+                        <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-red-100"><span className="text-xs font-bold text-red-500">PDF</span></div>
+                        <div className="flex-1 min-w-0"><p className="text-xs font-medium truncate text-gray-900">{msg.text?.replace('📎 ','')||'Document'}</p><p className="text-xs text-gray-400">En attente...</p></div>
+                      </div>
+                    )}
+                    {!msg.is_document && msg.text && <p className="whitespace-pre-wrap">{msg.text}</p>}
+                    <div className="flex items-center justify-end gap-1 mt-1">
+                      <span className="text-[10px] text-gray-500">{new Date(msg.timestamp).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})}</span>
+                      {msg.from_me && <svg className="w-4 h-4 text-blue-500" viewBox="0 0 16 15" fill="currentColor"><path d="M15.01 3.316l-.478-.372a.365.365 0 0 0-.51.063L8.666 9.88a.32.32 0 0 1-.484.032l-.358-.325a.32.32 0 0 0-.484.032l-.378.48a.418.418 0 0 0 .036.54l1.32 1.267a.32.32 0 0 0 .484-.034l6.272-8.048a.366.366 0 0 0-.064-.512zm-4.1 0l-.478-.372a.365.365 0 0 0-.51.063L4.566 9.88a.32.32 0 0 1-.484.032L1.892 7.77a.366.366 0 0 0-.516.005l-.423.433a.364.364 0 0 0 .006.514l3.255 3.185a.32.32 0 0 0 .484-.033l6.272-8.048a.365.365 0 0 0-.063-.51z"/></svg>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {selectedMessages.length===0 && <div className="text-center text-gray-400 text-sm py-4">Aucun message</div>}
+              <div ref={messagesEndRef} />
+            </div>
+            {connected && (
+              <div className="flex gap-2 mt-3">
+                <input ref={messageInputRef} type="text" placeholder="Écrire..." defaultValue="" onKeyDown={e => e.key==='Enter' && sendMsg()} className="flex-1 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                <button onClick={sendMsg} className="px-4 py-2.5 bg-emerald-500 text-white rounded-xl hover:bg-emerald-600"><Icon name="send" className="w-4 h-4" /></button>
+              </div>
+            )}
+          </div>
+
+          {/* RIGHT COLUMN: Notion Panel (40%) */}
+          <div className="w-[40%] overflow-y-auto space-y-3">
+            {c.notion_dossier_id ? (
+              loadingDetails ? (
+                <div className="flex items-center justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900" /></div>
+              ) : !dossierDetails ? (
+                <div className="bg-white rounded-xl border border-gray-200 p-6 text-center">
+                  <Icon name="notion" className="w-10 h-10 text-gray-300 mx-auto" />
+                  <p className="text-sm text-gray-500 mt-2">Impossible de charger</p>
+                  <button onClick={() => loadDossierDetails(c.notion_dossier_id)} className="mt-3 text-sm text-blue-600 hover:underline">Réessayer</button>
+                </div>
+              ) : (
+                <>
+                  {/* Dossier Header */}
+                  <div className="bg-gradient-to-r from-gray-900 to-gray-800 rounded-xl p-4 text-white">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center"><span className="text-lg font-bold">N</span></div>
+                        <div>
+                          <h3 className="font-bold">{dossierDetails.dossier?.name}</h3>
+                          <p className="text-gray-400 text-xs">{dossierDetails.dossier?.category || 'Dossier'}</p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        {dossierDetails.dossier?.driveUrl && <a href={dossierDetails.dossier.driveUrl} target="_blank" rel="noopener" className="p-2 bg-white/10 hover:bg-white/20 rounded-lg" title="Drive"><Icon name="drive" className="w-4 h-4" /></a>}
+                        <a href={dossierDetails.dossier?.url} target="_blank" rel="noopener" className="p-2 bg-white/10 hover:bg-white/20 rounded-lg" title="Notion">Ouvrir ↗</a>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Projects with Tasks */}
+                  {(dossierDetails.projects?.length > 0) && (
+                    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+                        <h4 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Icon name="project" className="w-4 h-4 text-purple-500" /> Projets</h4>
+                        <button onClick={() => { setShowCreateOpp(true); setShowCreateTask(false); }} className="text-xs text-purple-600 hover:underline">+ Nouveau</button>
+                      </div>
+                      <div className="divide-y divide-gray-50">
+                        {dossierDetails.projects.map(p => {
+                          const borderColor = p.type === 'Gestion' ? 'border-l-green-500' : p.type === 'Lead' ? 'border-l-purple-500' : p.type === 'Sinistre' ? 'border-l-red-500' : 'border-l-gray-300';
+                          return (
+                            <div key={p.id} className={`border-l-4 ${borderColor}`}>
+                              <a href={p.url} target="_blank" rel="noopener" className="flex items-center gap-2 p-3 hover:bg-gray-50 transition-colors">
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-medium text-sm text-gray-900 truncate">{p.name}</p>
+                                  <div className="flex items-center gap-2 mt-0.5">
+                                    <span className={`text-xs px-1.5 py-0.5 rounded ${p.type === 'Lead' ? 'bg-purple-100 text-purple-700' : p.type === 'Sinistre' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>{p.type}</span>
+                                    {p.type === 'Lead' && p.productType && <span className="text-xs text-gray-500">{p.productType}</span>}
+                                    {p.niveau && <span className="text-xs text-gray-400">{p.niveau}</span>}
+                                  </div>
+                                </div>
+                                <Icon name="chevron" className="w-4 h-4 text-gray-400" />
+                              </a>
+                              {/* Tasks under project */}
+                              {p.tasks?.length > 0 && (
+                                <div className="ml-4 border-l-2 border-gray-100 pl-3 pb-2">
+                                  {p.tasks.map(t => {
+                                    const dateStatus = getDateStatus(t.date);
+                                    return (
+                                      <a key={t.id} href={t.url} target="_blank" rel="noopener" className="flex items-center gap-2 py-1.5 px-2 hover:bg-gray-50 rounded transition-colors">
+                                        <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : '⬜'}</span>
+                                        <span className="text-xs text-gray-700 flex-1 truncate">{t.name}</span>
+                                        {t.date && <span className={`text-xs ${dateStatus === 'overdue' ? 'text-red-600 font-medium' : dateStatus === 'today' ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
+                                      </a>
+                                    );
+                                  })}
+                                  <button onClick={() => { setTaskForm({...taskForm, projectId: p.id}); setShowCreateTask(true); }} className="text-xs text-blue-600 hover:underline ml-2 mt-1">+ Tâche</button>
+                                </div>
+                              )}
+                              {!p.tasks?.length && (
+                                <button onClick={() => { setTaskForm({...taskForm, projectId: p.id}); setShowCreateTask(true); }} className="text-xs text-blue-600 hover:underline ml-6 pb-2">+ Tâche</button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Orphan Tasks */}
+                  {dossierDetails.orphanTasks?.length > 0 && (
+                    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                      <div className="px-3 py-2 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+                        <h4 className="font-semibold text-gray-900 text-sm flex items-center gap-2"><Icon name="tasks" className="w-4 h-4 text-blue-500" /> Autres tâches</h4>
+                      </div>
+                      <div className="p-2 space-y-1">
+                        {dossierDetails.orphanTasks.map(t => {
+                          const dateStatus = getDateStatus(t.date);
+                          return (
+                            <a key={t.id} href={t.url} target="_blank" rel="noopener" className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded-lg transition-colors">
+                              <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : '⬜'}</span>
+                              <span className="text-xs text-gray-700 flex-1 truncate">{t.name}</span>
+                              {t.date && <span className={`text-xs ${dateStatus === 'overdue' ? 'text-red-600 font-medium' : dateStatus === 'today' ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
+                            </a>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Stats */}
+                  <div className="bg-gray-50 rounded-lg p-3 text-center text-xs text-gray-500">
+                    {dossierDetails.stats?.activeProjects || 0} projets · {dossierDetails.stats?.pendingTasks || 0} tâches · {dossierDetails.stats?.contacts || 0} contacts
+                  </div>
+
+                  {/* Create Task Form */}
+                  {showCreateTask && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-semibold text-blue-800">Nouvelle tâche</p>
+                        <button onClick={() => setShowCreateTask(false)} className="text-xs text-blue-400 hover:text-blue-600">✕</button>
+                      </div>
+                      {dossierProjects.length > 0 && (
+                        <select value={taskForm.projectId} onChange={e => setTaskForm({...taskForm, projectId: e.target.value})} className="w-full px-3 py-2 text-xs border border-blue-200 rounded-lg bg-white">
+                          <option value="">— Aucun projet —</option>
+                          {dossierProjects.map(p => (<option key={p.id} value={p.id}>{p.type === 'Lead' ? '🩷' : p.type === 'Sinistre' ? '🔵' : '🟢'} {p.name}</option>))}
+                        </select>
+                      )}
+                      <input type="text" placeholder="Nom de la tâche..." value={taskForm.name} onChange={e => setTaskForm({...taskForm, name: e.target.value})} className="w-full px-3 py-2 text-sm border border-blue-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-400" autoFocus />
+                      <div className="flex gap-2">
+                        <select value={taskForm.priority} onChange={e => setTaskForm({...taskForm, priority: e.target.value})} className="flex-1 px-2 py-1.5 text-xs border border-blue-200 rounded-lg bg-white">
+                          <option value="Urg & Imp">🔴 Urg & Imp</option><option value="Important">🟠 Important</option><option value="Urgent">🟡 Urgent</option><option value="Secondaire">⚪ Secondaire</option><option value="En attente">🔵 En attente</option><option value="À prioriser">⬜ À prioriser</option>
+                        </select>
+                        <input type="date" value={taskForm.date} onChange={e => setTaskForm({...taskForm, date: e.target.value})} className="flex-1 px-2 py-1.5 text-xs border border-blue-200 rounded-lg bg-white" />
+                      </div>
+                      <button onClick={createTask} disabled={notionLoading||!taskForm.name} className="w-full py-2 bg-blue-500 text-white text-sm rounded-lg hover:bg-blue-600 disabled:opacity-50 font-medium">{notionLoading?'Création...':'✓ Créer'}</button>
+                    </div>
+                  )}
+
+                  {/* Create Project Form */}
+                  {showCreateOpp && (
+                    <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-semibold text-purple-800">Nouveau projet</p>
+                        <button onClick={() => setShowCreateOpp(false)} className="text-xs text-purple-400 hover:text-purple-600">✕</button>
+                      </div>
+                      <input type="text" placeholder="Nom du projet..." value={projectForm.name} onChange={e => setProjectForm({...projectForm, name: e.target.value})} className="w-full px-3 py-2 text-sm border border-purple-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-purple-400" autoFocus />
+                      <div className="flex gap-2">
+                        <select value={projectForm.type} onChange={e => setProjectForm({...projectForm, type: e.target.value})} className="flex-1 px-2 py-1.5 text-xs border border-purple-200 rounded-lg bg-white"><option value="Lead">🩷 Lead</option><option value="Sinistre">🔵 Sinistre</option><option value="Gestion">🟢 Gestion</option></select>
+                        <select value={projectForm.priority} onChange={e => setProjectForm({...projectForm, priority: e.target.value})} className="flex-1 px-2 py-1.5 text-xs border border-purple-200 rounded-lg bg-white"><option value="Urg & imp">🔴 Urg & imp</option><option value="Important">🟠 Important</option><option value="Urgent">🟡 Urgent</option><option value="Secondaire">⚪ Secondaire</option><option value="En attente">🔵 En attente</option><option value="À prioriser">⬜ À prioriser</option></select>
+                      </div>
+                      <select value={projectForm.niveau} onChange={e => setProjectForm({...projectForm, niveau: e.target.value})} className="w-full px-2 py-1.5 text-xs border border-purple-200 rounded-lg bg-white"><option value="">Niveau du projet...</option><option value="Devis à faire">Devis à faire</option><option value="En attente d'information">En attente d&apos;info</option><option value="Envoyé au client">Envoyé au client</option><option value="En attente de signature">En attente de signature</option></select>
+                      <button onClick={createProject} disabled={notionLoading||!projectForm.name} className="w-full py-2 bg-purple-500 text-white text-sm rounded-lg hover:bg-purple-600 disabled:opacity-50 font-medium">{notionLoading?'Création...':'✓ Créer'}</button>
+                    </div>
+                  )}
+                </>
+              )
+            ) : (
+              /* No dossier linked */
+              <div className="bg-white rounded-xl border border-gray-200 p-6 text-center">
+                <Icon name="notion" className="w-12 h-12 text-gray-300 mx-auto" />
+                <p className="text-sm text-gray-500 mt-3">Aucun dossier Notion lié</p>
+                {!showNotionLink ? (
+                  <button onClick={() => { setShowNotionLink(true); searchDossiers(''); }} className="mt-4 px-4 py-2 bg-gray-900 text-white text-sm rounded-lg hover:bg-gray-800">Rechercher un dossier</button>
+                ) : (
+                  <div className="mt-4 space-y-2 text-left">
+                    <div className="flex items-center gap-2">
+                      <input type="text" placeholder="Rechercher..." value={notionSearch} onChange={e => { setNotionSearch(e.target.value); searchDossiers(e.target.value); }} className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" autoFocus />
+                      <button onClick={() => setShowNotionLink(false)} className="text-xs text-gray-400 hover:text-gray-600 px-2">✕</button>
+                    </div>
+                    <div className="max-h-48 overflow-y-auto space-y-1">
+                      {notionSearching && <p className="text-xs text-gray-400 text-center py-2">Recherche...</p>}
+                      {!notionSearching && notionError && <div className="text-xs text-red-500 text-center py-2">⚠️ {notionError}</div>}
+                      {!notionSearching && !notionError && notionResults.length===0 && <p className="text-xs text-gray-400 text-center py-2">Aucun résultat</p>}
+                      {notionResults.map(d => (
+                        <button key={d.id} onClick={() => linkDossier(d)} disabled={notionLoading} className="w-full text-left px-3 py-2 rounded-lg hover:bg-blue-50 border border-transparent hover:border-blue-200 flex items-center gap-2">
+                          <div className="w-6 h-6 rounded bg-gray-900 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">N</div>
+                          <span className="text-sm text-gray-800 truncate">{d.name}</span>
+                          {d.phone && <span className="text-xs text-gray-400 flex-shrink-0">{d.phone}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   // ==================== DOCUMENTS VIEW ====================
   const DocumentsView = () => { const [filter, setFilter] = useState('all'); const filtered = filter==='all'?documents:documents.filter(d => d.status===filter);
@@ -597,8 +806,8 @@ export default function WhatsAppAgent() {
       <p className="text-xs text-purple-600 mt-1 mb-3">Ces prospects n&apos;ont pas de dossier Notion lié → pas de projet rattaché</p>
       <div className="space-y-1.5">{prospectConvs.filter(c => !c.notion_dossier_id).slice(0, 10).map(c => (
         <button key={c.jid} onClick={() => openConversation(c)} className="w-full flex items-center gap-2 bg-white rounded-lg px-3 py-2 hover:shadow-sm text-left">
-          <div className={`w-7 h-7 rounded-full ${c.avatar_color} flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}>{c.avatar_initials}</div>
-          <span className="text-sm text-gray-900 flex-1 truncate">{c.name}</span>
+          <div className={`w-7 h-7 rounded-full ${c.avatar_color} flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}>{getInitialsFor(c)}</div>
+          <span className="text-sm text-gray-900 flex-1 truncate">{getName(c)}</span>
           <span className="text-xs text-purple-500">→ Lier dossier</span>
         </button>))}</div>
     </div>)}
@@ -609,14 +818,52 @@ export default function WhatsAppAgent() {
   </div>); };
 
   // ==================== SETTINGS ====================
-  const Settings = () => (<div className="space-y-6"><div><h2 className="text-2xl font-bold text-gray-900">Paramètres</h2></div>
+  const [showJournal, setShowJournal] = useState(false);
+
+  const Settings = () => {
+    useEffect(() => { loadAgentLogs(); }, []);
+    return (<div className="space-y-6"><div><h2 className="text-2xl font-bold text-gray-900">Paramètres</h2></div>
     <div className="bg-white rounded-xl border border-gray-200 p-6"><div className="flex items-center gap-3 mb-4"><div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center"><Icon name="wifi" className="w-5 h-5 text-emerald-600" /></div><div><h3 className="font-semibold text-gray-900">Connexion WhatsApp</h3><p className="text-sm text-gray-500">Via QR code</p></div></div>
     {connected ? (<div className="flex items-center justify-between bg-emerald-50 rounded-lg p-4"><div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" /><span className="text-sm font-medium text-emerald-800">Connecté ✓</span></div><button onClick={handleDisconnect} className="text-sm text-red-600 hover:underline">Déconnecter</button></div>)
     : connecting && qrImage ? (<div className="text-center py-4"><img src={qrImage} alt="QR" className="mx-auto w-64 h-64 rounded-xl border-2 border-gray-200" /><p className="text-sm text-gray-600 mt-4 font-medium">Scannez avec WhatsApp</p><p className="text-xs text-gray-400 mt-1">WhatsApp → ⋮ → Appareils connectés → Connecter</p><div className="mt-3 flex items-center justify-center gap-2 text-amber-600 text-xs"><div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" /> En attente...</div><button onClick={handleDisconnect} className="mt-4 px-6 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-300">Annuler</button></div>)
     : connecting ? (<div className="text-center py-8"><div className="w-12 h-12 rounded-full border-4 border-emerald-500 border-t-transparent animate-spin mx-auto" /><p className="text-sm text-gray-600 mt-4">QR code...</p><button onClick={async () => { await handleDisconnect(); setConnecting(false); }} className="mt-4 px-6 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-300">Annuler</button></div>)
     : (<div className="text-center py-8"><div className="w-48 h-48 bg-gray-100 rounded-xl mx-auto flex items-center justify-center border-2 border-dashed border-gray-300"><Icon name="qr" className="w-20 h-20 text-gray-400" /></div><p className="text-sm text-gray-600 mt-4">Connecter WhatsApp</p><button onClick={handleConnect} className="mt-4 px-8 py-3 bg-emerald-500 text-white rounded-xl text-sm font-medium hover:bg-emerald-600">🔗 Connecter</button></div>)}</div>
     <div className="bg-white rounded-xl border border-gray-200 p-6"><h3 className="font-semibold text-gray-900 mb-2">Comment ça marche</h3><div className="space-y-3 text-sm text-gray-600"><p>1. Cliquez sur <strong>Connecter</strong></p><p>2. Scannez le QR code</p><p>3. WhatsApp → ⋮ → <strong>Appareils connectés</strong></p><p>4. ✅ Messages en temps réel</p></div></div>
-  </div>);
+
+    {/* Journal Agent Section */}
+    <div className="bg-white rounded-xl border border-gray-200">
+      <button onClick={() => setShowJournal(!showJournal)} className="w-full p-4 flex items-center justify-between hover:bg-gray-50">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-purple-50 flex items-center justify-center"><Icon name="journal" className="w-5 h-5 text-purple-600" /></div>
+          <div className="text-left"><h3 className="font-semibold text-gray-900">Journal Agent</h3><p className="text-sm text-gray-500">{agentLogTotal} actions enregistrées</p></div>
+        </div>
+        <Icon name="chevron" className={`w-5 h-5 text-gray-400 transition-transform ${showJournal ? 'rotate-90' : ''}`} />
+      </button>
+      {showJournal && (
+        <div className="border-t border-gray-200 p-4 space-y-3">
+          <div className="flex gap-2 flex-wrap">{[{id:null,label:'Toutes',icon:'📋'},{id:'task_created',label:'Tâches',icon:'✅'},{id:'project_created',label:'Projets',icon:'📁'},{id:'doc_downloaded',label:'Downloads',icon:'📥'},{id:'dossier_linked',label:'Liaisons',icon:'🔗'}].map(at => (<button key={at.id||'all'} onClick={() => { setLogTypeFilter(at.id); loadAgentLogs(at.id); }} className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 ${logTypeFilter===at.id?'bg-purple-100 text-purple-700':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}><span>{at.icon}</span> {at.label}</button>))}</div>
+          <div className="max-h-96 overflow-y-auto divide-y divide-gray-50">
+            {agentLogs.length === 0 ? (<div className="py-8 text-center text-gray-400 text-sm">Aucune action</div>) : agentLogs.slice(0, 50).map(log => {
+              const meta = (() => { try { return JSON.parse(log.metadata || '{}'); } catch { return {}; } })();
+              return (
+                <div key={log.id} className="py-3 flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center text-sm flex-shrink-0">{LOG_ICONS[log.action_type] || '📋'}</div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-900">{log.description}</p>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      {log.conversation_name && <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">👤 {log.conversation_name}</span>}
+                      {meta.filename && <span className="text-xs text-gray-400 truncate">📄 {meta.filename}</span>}
+                    </div>
+                  </div>
+                  <p className="text-xs font-mono text-gray-400 flex-shrink-0">{formatLogTime(log.timestamp)}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  </div>);};
 
   // ==================== RENDER ====================
   const renderView = () => { if (view === 'detail' && selectedJid) return <Detail />; switch(view) { case 'dashboard': return <Dashboard />; case 'kanban': return <Kanban />; case 'conversations': return <ConversationsList />; case 'documents': return <DocumentsView />; case 'journal': return <JournalView />; case 'analytics': return <Analytics />; case 'settings': return <Settings />; default: return <Dashboard />; } };
@@ -633,6 +880,85 @@ export default function WhatsAppAgent() {
       <div className="flex items-center gap-2 flex-shrink-0"><a href={previewDoc.url} download={previewDoc.filename} className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 flex items-center gap-1.5"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>Télécharger</a><a href={previewDoc.url} target="_blank" rel="noopener" className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50">Ouvrir ↗</a><button onClick={() => setPreviewDoc(null)} className="p-1.5 hover:bg-gray-200 rounded-lg"><svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button></div></div>
       <div className="flex-1 overflow-hidden bg-gray-100" style={{minHeight:'60vh'}}>{previewDoc.mimetype?.includes('pdf') ? <iframe src={previewDoc.url} className="w-full h-full border-0" style={{minHeight:'60vh'}} title={previewDoc.filename} /> : previewDoc.mimetype?.startsWith('image/') ? <div className="w-full h-full flex items-center justify-center p-4"><img src={previewDoc.url} alt={previewDoc.filename} className="max-w-full max-h-full object-contain" /></div> : <div className="w-full h-full flex items-center justify-center"><div className="text-center p-8"><Icon name="file" className="w-16 h-16 text-gray-300 mx-auto" /><p className="text-gray-500 mt-3">Aperçu non disponible</p><a href={previewDoc.url} download={previewDoc.filename} className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>Télécharger</a></div></div>}</div>
     </div></div>)}
+
+    {/* Tag → Project Linking Modal */}
+    {tagProjectModal && (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setTagProjectModal(null)}>
+        <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden" onClick={e => e.stopPropagation()}>
+          <div className={`p-4 ${tagProjectModal.tag === 'Gestion' ? 'bg-green-500' : tagProjectModal.tag === 'Lead' ? 'bg-purple-500' : 'bg-red-500'} text-white`}>
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-lg">Lier "{tagProjectModal.tag}" à un projet</h3>
+              <button onClick={() => setTagProjectModal(null)} className="p-1 hover:bg-white/20 rounded-lg">✕</button>
+            </div>
+          </div>
+          <div className="p-4 space-y-4">
+            {/* Current link status */}
+            {(() => {
+              const conv = conversations.find(c => c.jid === tagProjectModal.jid);
+              const linkedProject = conv?.tag_projects?.[tagProjectModal.tag];
+              const matchingProjects = dossierProjects.filter(p => p.type === tagProjectModal.tag);
+
+              return (
+                <>
+                  {linkedProject ? (
+                    <div className="bg-gray-50 rounded-lg p-3">
+                      <p className="text-sm text-gray-600">Actuellement lié à :</p>
+                      <div className="flex items-center justify-between mt-2">
+                        <a href={linkedProject.url} target="_blank" rel="noopener" className="font-medium text-gray-900 hover:text-blue-600 hover:underline">{linkedProject.name} ↗</a>
+                        <button onClick={async () => {
+                          const newTagProjects = {...(conv.tag_projects || {})};
+                          delete newTagProjects[tagProjectModal.tag];
+                          await api('update-status', 'POST', { jid: tagProjectModal.jid, tag_projects: newTagProjects });
+                          loadConversations();
+                          if (selectedJid === tagProjectModal.jid) loadMessages(tagProjectModal.jid);
+                          setTagProjectModal(null);
+                        }} className="text-xs text-red-600 hover:underline">Délier</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500">Ce tag n'est pas encore lié à un projet.</p>
+                  )}
+
+                  {/* Matching projects from dossier */}
+                  {matchingProjects.length > 0 && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-700 mb-2">Projets "{tagProjectModal.tag}" disponibles :</p>
+                      <div className="space-y-2">
+                        {matchingProjects.map(p => (
+                          <button key={p.id} onClick={async () => {
+                            const newTagProjects = {...(conv?.tag_projects || {}), [tagProjectModal.tag]: { id: p.id, name: p.name, url: p.url }};
+                            await api('update-status', 'POST', { jid: tagProjectModal.jid, tag_projects: newTagProjects });
+                            loadConversations();
+                            if (selectedJid === tagProjectModal.jid) loadMessages(tagProjectModal.jid);
+                            setTagProjectModal(null);
+                          }} className={`w-full text-left p-3 rounded-lg border hover:shadow-sm transition-shadow ${linkedProject?.id === p.id ? 'border-2 border-emerald-500 bg-emerald-50' : 'border-gray-200'}`}>
+                            <p className="font-medium text-gray-900">{p.name}</p>
+                            {p.niveau && <p className="text-xs text-gray-500">{p.niveau}</p>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {matchingProjects.length === 0 && (
+                    <div className="text-center py-4">
+                      <p className="text-sm text-gray-500">Aucun projet "{tagProjectModal.tag}" dans ce dossier</p>
+                      <button onClick={() => {
+                        setProjectForm({ name: '', type: tagProjectModal.tag, priority: 'À prioriser', niveau: '' });
+                        setShowCreateOpp(true);
+                        setTagProjectModal(null);
+                      }} className={`mt-3 px-4 py-2 rounded-lg text-sm font-medium text-white ${tagProjectModal.tag === 'Gestion' ? 'bg-green-500 hover:bg-green-600' : tagProjectModal.tag === 'Lead' ? 'bg-purple-500 hover:bg-purple-600' : 'bg-red-500 hover:bg-red-600'}`}>
+                        + Créer un projet {tagProjectModal.tag}
+                      </button>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      </div>
+    )}
   </div>);
 }
 

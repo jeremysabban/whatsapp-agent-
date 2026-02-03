@@ -74,6 +74,13 @@ function getDb() {
     addCol('conversations', 'tags', "TEXT DEFAULT '[]'");
     addCol('messages', 'media_url', 'TEXT DEFAULT NULL');
     addCol('messages', 'media_mimetype', 'TEXT DEFAULT NULL');
+    addCol('conversations', 'starred', 'INTEGER DEFAULT 0');
+    addCol('conversations', 'tag_projects', "TEXT DEFAULT '{}'");
+    addCol('conversations', 'email', 'TEXT DEFAULT NULL');
+    addCol('conversations', 'whatsapp_name', 'TEXT DEFAULT NULL');
+    addCol('conversations', 'custom_name', 'TEXT DEFAULT NULL');
+    // Migrate existing 'name' to 'whatsapp_name' if whatsapp_name is null
+    _db.exec(`UPDATE conversations SET whatsapp_name = name WHERE whatsapp_name IS NULL AND name IS NOT NULL`);
     // Migrate old statuses to hsva
     _db.exec(`UPDATE conversations SET status = 'hsva' WHERE status NOT IN ('client', 'assurance', 'prospect', 'hsva') OR status IS NULL`);
   }
@@ -94,20 +101,39 @@ function getAvatarColor(jid) {
   return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
 }
 
+// Display name priority: notion_dossier_name > custom_name > whatsapp_name > phone
+export function getDisplayName(conv) {
+  return conv.notion_dossier_name || conv.custom_name || conv.whatsapp_name || conv.phone || conv.jid?.split('@')[0] || 'Inconnu';
+}
+
+// Enrich conversation with display_name for frontend
+function enrichConversation(r) {
+  if (!r) return r;
+  r.tags = r.tags ? JSON.parse(r.tags) : [];
+  r.tag_projects = r.tag_projects ? JSON.parse(r.tag_projects) : {};
+  r.starred = r.starred === 1;
+  r.display_name = getDisplayName(r);
+  r.display_initials = getInitials(r.display_name);
+  return r;
+}
+
 export function upsertConversation(jid, name, phone) {
   const db = getDb();
   const existing = db.prepare('SELECT * FROM conversations WHERE jid = ?').get(jid);
   if (existing) {
-    if (name && name !== existing.name && !name.match(/^\+?\d{6,}/)) {
-      db.prepare('UPDATE conversations SET name = ?, avatar_initials = ?, updated_at = ? WHERE jid = ?')
-        .run(name, getInitials(name), Date.now(), jid);
+    // Only update whatsapp_name from WhatsApp push name (never touch custom_name or notion_dossier_name)
+    if (name && name !== existing.whatsapp_name && !name.match(/^\+?\d{6,}/)) {
+      db.prepare('UPDATE conversations SET whatsapp_name = ?, updated_at = ? WHERE jid = ?')
+        .run(name, Date.now(), jid);
     }
-    return db.prepare('SELECT * FROM conversations WHERE jid = ?').get(jid);
+    return enrichConversation(db.prepare('SELECT * FROM conversations WHERE jid = ?').get(jid));
   }
-  const displayName = name || phone || jid.split('@')[0];
-  db.prepare('INSERT INTO conversations (jid,name,phone,avatar_initials,avatar_color,created_at,updated_at,last_activity_at) VALUES (?,?,?,?,?,?,?,?)')
-    .run(jid, displayName, phone || jid.split('@')[0], getInitials(displayName), getAvatarColor(jid), Date.now(), Date.now(), Date.now());
-  return db.prepare('SELECT * FROM conversations WHERE jid = ?').get(jid);
+  const waName = name || null;
+  const phoneNum = phone || jid.split('@')[0];
+  const displayName = waName || phoneNum;
+  db.prepare('INSERT INTO conversations (jid,name,whatsapp_name,phone,avatar_initials,avatar_color,created_at,updated_at,last_activity_at) VALUES (?,?,?,?,?,?,?,?,?)')
+    .run(jid, displayName, waName, phoneNum, getInitials(displayName), getAvatarColor(jid), Date.now(), Date.now(), Date.now());
+  return enrichConversation(db.prepare('SELECT * FROM conversations WHERE jid = ?').get(jid));
 }
 
 // ==================== CONVERSATIONS ====================
@@ -128,7 +154,7 @@ function timeCutoff(period) {
 export function getConversations({ labelName, timePeriod } = {}) {
   const db = getDb();
   const cutoff = Date.now() - SIX_MONTHS_MS;
-  let q = `SELECT c.*, 
+  let q = `SELECT c.*,
     (SELECT COUNT(*) FROM documents d WHERE d.conversation_jid=c.jid) as document_count,
     (SELECT COUNT(*) FROM documents d WHERE d.conversation_jid=c.jid AND d.status!='traite') as pending_docs,
     (SELECT GROUP_CONCAT(wl.name,'||') FROM wa_label_associations wla JOIN wa_labels wl ON wla.label_id=wl.id WHERE wla.chat_jid=c.jid) as label_names
@@ -141,13 +167,17 @@ export function getConversations({ labelName, timePeriod } = {}) {
   const tc = timeCutoff(timePeriod);
   if (tc) { q += ` AND c.last_message_time >= ?`; p.push(tc); }
   q += ` ORDER BY c.last_message_time DESC NULLS LAST`;
-  return db.prepare(q).all(...p).map(r => ({ ...r, labels: r.label_names ? r.label_names.split('||').filter(Boolean) : [], tags: r.tags ? JSON.parse(r.tags) : [] }));
+  return db.prepare(q).all(...p).map(r => {
+    const conv = enrichConversation(r);
+    conv.labels = r.label_names ? r.label_names.split('||').filter(Boolean) : [];
+    return conv;
+  });
 }
 
 export function getTaggedConversations({ timePeriod } = {}) {
   const db = getDb();
   const cutoff = Date.now() - SIX_MONTHS_MS;
-  let q = `SELECT c.*, 
+  let q = `SELECT c.*,
     (SELECT COUNT(*) FROM documents d WHERE d.conversation_jid=c.jid) as document_count,
     (SELECT COUNT(*) FROM documents d WHERE d.conversation_jid=c.jid AND d.status!='traite') as pending_docs,
     (SELECT GROUP_CONCAT(wl.name,'||') FROM wa_label_associations wla JOIN wa_labels wl ON wla.label_id=wl.id WHERE wla.chat_jid=c.jid) as label_names
@@ -157,13 +187,16 @@ export function getTaggedConversations({ timePeriod } = {}) {
   const tc = timeCutoff(timePeriod);
   if (tc) { q += ` AND c.last_message_time >= ?`; p.push(tc); }
   q += ` ORDER BY c.last_message_time DESC NULLS LAST`;
-  return db.prepare(q).all(...p).map(r => ({ ...r, labels: r.label_names ? r.label_names.split('||').filter(Boolean) : [], tags: r.tags ? JSON.parse(r.tags) : [] }));
+  return db.prepare(q).all(...p).map(r => {
+    const conv = enrichConversation(r);
+    conv.labels = r.label_names ? r.label_names.split('||').filter(Boolean) : [];
+    return conv;
+  });
 }
 
 export function getConversation(jid) {
   const r = getDb().prepare('SELECT * FROM conversations WHERE jid=?').get(jid);
-  if (r && r.tags) r.tags = JSON.parse(r.tags);
-  return r;
+  return enrichConversation(r);
 }
 export function updateConversationStatus(jid, s) { getDb().prepare('UPDATE conversations SET status=?,updated_at=? WHERE jid=?').run(s, Date.now(), jid); }
 export function updateConversationCategory(jid, c) { getDb().prepare('UPDATE conversations SET category=?,updated_at=? WHERE jid=?').run(c, Date.now(), jid); }
@@ -173,6 +206,16 @@ export function updateConversationNotes(jid, n) { getDb().prepare('UPDATE conver
 export function updateConversationLastMessage(jid, text, ts) { getDb().prepare('UPDATE conversations SET last_message=?,last_message_time=?,last_activity_at=?,updated_at=? WHERE jid=?').run(text, ts, Date.now(), Date.now(), jid); }
 export function incrementUnread(jid) { getDb().prepare('UPDATE conversations SET unread_count=unread_count+1 WHERE jid=?').run(jid); }
 export function resetUnread(jid) { getDb().prepare('UPDATE conversations SET unread_count=0 WHERE jid=?').run(jid); }
+export function updateStarred(jid, starred) { getDb().prepare('UPDATE conversations SET starred=?,updated_at=? WHERE jid=?').run(starred ? 1 : 0, Date.now(), jid); }
+export function updateTagProjects(jid, tagProjects) { getDb().prepare('UPDATE conversations SET tag_projects=?,updated_at=? WHERE jid=?').run(JSON.stringify(tagProjects), Date.now(), jid); }
+export function getStarredConversations() {
+  const db = getDb();
+  return db.prepare('SELECT * FROM conversations WHERE starred=1 ORDER BY last_message_time DESC').all().map(r => {
+    const conv = enrichConversation(r);
+    conv.labels = [];
+    return conv;
+  });
+}
 
 export function insertMessage(id, jid, fromMe, senderName, text, ts, msgType, isDoc, docId, raw) {
   const db = getDb();
@@ -201,6 +244,8 @@ export function getDocuments(jid=null, status=null) {
 export function updateDocumentStatus(docId, status) { getDb().prepare('UPDATE documents SET status=? WHERE id=?').run(status, docId); }
 
 export function linkNotionDossier(jid, dossierId, dossierName, dossierUrl) {
+  // Only update notion_dossier fields - do NOT overwrite name/whatsapp_name/custom_name
+  // The display_name will be computed at query time with priority: notion_dossier_name > custom_name > whatsapp_name
   getDb().prepare('UPDATE conversations SET notion_dossier_id=?, notion_dossier_name=?, notion_dossier_url=?, updated_at=? WHERE jid=?')
     .run(dossierId, dossierName, dossierUrl, Date.now(), jid);
 }
@@ -274,8 +319,9 @@ export function forceUpdateName(jid, name) {
 
 export function setCustomName(jid, name) {
   if (!name) return;
-  getDb().prepare('UPDATE conversations SET name=?, avatar_initials=?, updated_at=? WHERE jid=?')
-    .run(name.trim(), getInitials(name), Date.now(), jid);
+  // Only update custom_name - this takes priority over whatsapp_name but not notion_dossier_name
+  getDb().prepare('UPDATE conversations SET custom_name=?, updated_at=? WHERE jid=?')
+    .run(name.trim(), Date.now(), jid);
 }
 
 export function setEmail(jid, email) {
