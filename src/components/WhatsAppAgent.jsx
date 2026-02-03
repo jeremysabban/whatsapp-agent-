@@ -94,7 +94,7 @@ export default function WhatsAppAgent() {
   const [showNotionLink, setShowNotionLink] = useState(false);
   const [showCreateTask, setShowCreateTask] = useState(false);
   const [showCreateOpp, setShowCreateOpp] = useState(false);
-  const [taskForm, setTaskForm] = useState({ name: '', priority: 'À prioriser', date: '', projectId: '' });
+  const [taskForm, setTaskForm] = useState({ name: '', priority: 'À prioriser', date: new Date().toISOString().split('T')[0], projectId: '' });
   const [projectForm, setProjectForm] = useState({ name: '', type: 'Lead', priority: 'À prioriser', niveau: '' });
   const [notionLoading, setNotionLoading] = useState(false);
   const [notionSuccess, setNotionSuccess] = useState(null);
@@ -268,9 +268,6 @@ export default function WhatsAppAgent() {
     const statusCounts = { client: conversations.filter(c => c.status === 'client').length, assurance: conversations.filter(c => c.status === 'assurance').length, prospect: conversations.filter(c => c.status === 'prospect').length };
     const [taskFilter, setTaskFilter] = useState(null);
     const filteredTasks = taskFilter ? allTasks.filter(t => t.status === taskFilter) : allTasks;
-
-    // Reload tasks on mount if empty
-    useEffect(() => { if (allTasks.length === 0) loadAllTasks(); }, []);
 
     return (
       <div className="space-y-6">
