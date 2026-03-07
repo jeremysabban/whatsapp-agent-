@@ -23,10 +23,21 @@ async function notionSearch(query) {
   const data = await res.json();
   
   return data.results.map(page => {
-    const title = page.properties['Nom du dossier']?.title?.[0]?.plain_text || 'Sans nom';
+    let title = page.properties['Nom du dossier']?.title?.[0]?.plain_text || '';
+
+    // Si le nom est vide ou juste un emoji, extraire depuis l'URL
+    if (!title || title.length <= 3 || /^[\p{Emoji}\s]+$/u.test(title)) {
+      const urlMatch = page.url?.match(/notion\.so\/([^-]+-[^-]+(?:-[^-]+)*)-[a-f0-9]{32}/i);
+      if (urlMatch) {
+        title = urlMatch[1].replace(/-/g, ' ');
+      } else {
+        title = 'Sans nom';
+      }
+    }
+
     const driveUrl = page.properties['Google drive']?.url || null;
     const phone = page.properties['telephone']?.rollup?.results?.[0]?.phone_number || null;
-    
+
     return {
       id: page.id,
       name: title,

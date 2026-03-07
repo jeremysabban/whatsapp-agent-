@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
-
-const NOTION_API_KEY = process.env.NOTION_API_KEY || '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';
-const CONTACTS_DB_ID = 'c812f778-cd65-413f-8feb-5cbc4fbb5dd8';
+import { NOTION_CONTACTS_DB_ID, notionHeaders } from '@/lib/notion-config';
 
 function formatPhone(phone) {
   let digits = phone?.replace(/\D/g, '') || '';
@@ -35,13 +33,9 @@ export async function POST(req) {
     console.log(`[Notion Sync] Name: ${name}, Phone: ${phone} -> ${formattedPhone}, Search: ${lastDigits}`);
 
     // Check if contact already exists (search by last 9 digits to handle format differences)
-    const searchRes = await fetch(`https://api.notion.com/v1/databases/${CONTACTS_DB_ID}/query`, {
+    const searchRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_CONTACTS_DB_ID}/query`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${NOTION_API_KEY}`,
-        'Content-Type': 'application/json',
-        'Notion-Version': '2022-06-28',
-      },
+      headers: notionHeaders(),
       body: JSON.stringify({
         filter: { property: '*Téléphone', phone_number: { contains: lastDigits } }
       }),
@@ -70,11 +64,7 @@ export async function POST(req) {
       // Update existing contact
       const updateRes = await fetch(`https://api.notion.com/v1/pages/${existingContact.id}`, {
         method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${NOTION_API_KEY}`,
-          'Content-Type': 'application/json',
-          'Notion-Version': '2022-06-28',
-        },
+        headers: notionHeaders(),
         body: JSON.stringify({ properties }),
       });
       result = await updateRes.json();
@@ -83,13 +73,9 @@ export async function POST(req) {
       // Create new contact
       const createRes = await fetch('https://api.notion.com/v1/pages', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${NOTION_API_KEY}`,
-          'Content-Type': 'application/json',
-          'Notion-Version': '2022-06-28',
-        },
+        headers: notionHeaders(),
         body: JSON.stringify({
-          parent: { database_id: CONTACTS_DB_ID },
+          parent: { database_id: NOTION_CONTACTS_DB_ID },
           properties,
         }),
       });

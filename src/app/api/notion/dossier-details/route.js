@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
-import { NOTION_TASKS_DB_ID, NOTION_PROJECTS_DB_ID, NOTION_CONTRACTS_DB_ID, notionHeaders } from '@/lib/notion-config';
-import { getNotionCache, setNotionCache } from '@/lib/database';
-
-const CONTACTS_DB_ID = 'c812f778-cd65-413f-8feb-5cbc4fbb5dd8';
+import { NOTION_TASKS_DB_ID, NOTION_PROJECTS_DB_ID, NOTION_CONTRACTS_DB_ID, NOTION_CONTACTS_DB_ID, notionHeaders } from '@/lib/notion-config';
+import { getNotionCache, setNotionCache, findJidByNotionContactId } from '@/lib/database';
 
 async function fetchPage(pageId) {
   const res = await fetch(`https://api.notion.com/v1/pages/${pageId}`, { headers: notionHeaders() });
@@ -59,7 +57,7 @@ async function fetchTasks(dossierId) {
 }
 
 async function fetchContacts(dossierId) {
-  const res = await fetch(`https://api.notion.com/v1/databases/${CONTACTS_DB_ID}/query`, {
+  const res = await fetch(`https://api.notion.com/v1/databases/${NOTION_CONTACTS_DB_ID}/query`, {
     method: 'POST',
     headers: notionHeaders(),
     body: JSON.stringify({
@@ -79,34 +77,38 @@ async function fetchContacts(dossierId) {
   }));
 }
 
-async function fetchContracts(dossierId, projects) {
+async function fetchContracts(dossierId) {
   if (!NOTION_CONTRACTS_DB_ID) return [];
   const res = await fetch(`https://api.notion.com/v1/databases/${NOTION_CONTRACTS_DB_ID}/query`, {
     method: 'POST',
     headers: notionHeaders(),
     body: JSON.stringify({
-      filter: { property: '💬 Dossiers', relation: { contains: dossierId } },
+      filter: { property: 'Dossiers', relation: { contains: dossierId } },
     }),
   });
   if (!res.ok) return [];
   const data = await res.json();
 
-  const projectTypeMap = {};
-  for (const p of projects) {
-    projectTypeMap[p.id] = p.type;
-  }
-
   return data.results.map(c => {
-    const projectId = c.properties['Projet']?.relation?.[0]?.id || null;
-    const projectType = projectId ? projectTypeMap[projectId] || null : null;
+    const statutFormula = c.properties['Statut']?.formula;
+    let status = '';
+    if (statutFormula) {
+      status = statutFormula.string || statutFormula.number?.toString() || '';
+    }
+    const detailsRt = c.properties['détails du contrat']?.rich_text || [];
+    const details = detailsRt.map(rt => rt.plain_text).join('');
     return {
       id: c.id,
-      name: c.properties['Name']?.title?.[0]?.plain_text || c.properties['Nom']?.title?.[0]?.plain_text || 'Sans nom',
-      compagnie: c.properties['Compagnie']?.select?.name || c.properties['Compagnie']?.relation?.[0]?.id || '',
-      productType: c.properties['Type de produit']?.select?.name || c.properties['Produit']?.select?.name || '',
-      status: c.properties['Statut']?.status?.name || c.properties['Statut']?.select?.name || '',
-      projectId,
-      projectType,
+      name: c.properties['🏆 Numero du contrat']?.title?.[0]?.plain_text || 'Sans numéro',
+      productType: c.properties['Type Assurance']?.select?.name || '',
+      type_assurance: c.properties['Type Assurance']?.select?.name || null,
+      cie_details: c.properties['ID Contrat/CIE']?.rich_text?.[0]?.plain_text || null,
+      status,
+      dateEffet: c.properties['Date d\'effet']?.date?.start || null,
+      dateSignature: c.properties['# Date de signature']?.date?.start || null,
+      dateResiliation: c.properties['Date de resilitation']?.date?.start || null,
+      desactive: c.properties['Desactivé']?.checkbox || false,
+      details,
       url: c.url,
     };
   });
@@ -117,10 +119,26 @@ async function fetchAndBuildResponse(dossierId) {
   if (!dossier) return null;
 
   const props = dossier.properties;
+
+  // Extraction du nom : priorité Nom du dossier, sinon extraction depuis l'URL
+  let dossierName = props['Nom du dossier']?.title?.[0]?.plain_text || '';
+  // Si le nom est vide ou juste un emoji, extraire depuis l'URL
+  if (!dossierName || dossierName.length <= 3 || /^[\p{Emoji}\s]+$/u.test(dossierName)) {
+    // URL format: https://www.notion.so/NOM-DU-DOSSIER-pageid
+    const urlMatch = dossier.url?.match(/notion\.so\/([^-]+-[^-]+(?:-[^-]+)*)-[a-f0-9]{32}/i);
+    if (urlMatch) {
+      dossierName = urlMatch[1].replace(/-/g, ' ');
+    } else {
+      dossierName = 'Sans nom';
+    }
+  }
+
   const dossierInfo = {
     id: dossier.id,
-    name: props['Nom du dossier']?.title?.[0]?.plain_text || 'Sans nom',
+    identifiant: props['Identifiant']?.unique_id ? `DOS-${props['Identifiant'].unique_id.number}` : (props['Identifiant']?.rich_text?.[0]?.plain_text || props['Identifiant']?.title?.[0]?.plain_text || ''),
+    name: dossierName,
     driveUrl: props['Google drive']?.url || null,
+    geminiUrl: props['Gemini GPT']?.url || props['Gemini CHAT']?.url || null,
     category: props['Cat Client']?.select?.name || '',
     createdAt: dossier.created_time,
     url: dossier.url,
@@ -132,7 +150,7 @@ async function fetchAndBuildResponse(dossierId) {
     fetchContacts(dossierId),
   ]);
 
-  const contracts = await fetchContracts(dossierId, projects);
+  const contracts = await fetchContracts(dossierId);
 
   const activeProjects = projects.filter(p => !p.done);
   const doneProjects = projects.filter(p => p.done);
@@ -162,6 +180,12 @@ async function fetchAndBuildResponse(dossierId) {
     contracts: contracts.length,
   };
 
+  // Siblings = all contacts linked to this dossier, with WhatsApp JID if available
+  const siblings = contacts.map(ct => {
+    const jid = findJidByNotionContactId(ct.id);
+    return { id: ct.id, name: ct.name, url: ct.url, jid, has_whatsapp: !!jid };
+  });
+
   return {
     dossier: dossierInfo,
     contracts,
@@ -169,6 +193,7 @@ async function fetchAndBuildResponse(dossierId) {
     doneProjects,
     orphanTasks,
     contacts,
+    siblings,
     stats,
   };
 }

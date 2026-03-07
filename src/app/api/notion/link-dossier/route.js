@@ -1,9 +1,8 @@
 import { NextResponse } from 'next/server';
 import { Client } from '@notionhq/client';
 import { linkNotionDossier, getConversation } from '@/lib/database';
+import { NOTION_API_KEY, NOTION_CONTACTS_DB_ID } from '@/lib/notion-config';
 
-const NOTION_API_KEY = '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';
-const CONTACTS_DB_ID = 'c812f778-cd65-413f-8feb-5cbc4fbb5dd8';
 const notion = new Client({ auth: NOTION_API_KEY });
 
 function formatPhone(phone) {
@@ -29,13 +28,13 @@ export async function POST(req) {
 
         // Check if contact already exists
         const existing = await notion.databases.query({
-          database_id: CONTACTS_DB_ID,
+          database_id: NOTION_CONTACTS_DB_ID,
           filter: { property: '*Téléphone', phone_number: { equals: formatPhone(phone) } }
         });
 
         if (existing.results.length === 0) {
           await notion.pages.create({
-            parent: { database_id: CONTACTS_DB_ID },
+            parent: { database_id: NOTION_CONTACTS_DB_ID },
             properties: {
               'Nom_Prénom': { title: [{ text: { content: conv.name } }] },
               '*Téléphone': { phone_number: formatPhone(phone) },

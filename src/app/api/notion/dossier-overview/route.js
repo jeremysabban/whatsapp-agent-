@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
-import { NOTION_API_KEY, NOTION_DOSSIERS_DB_ID, NOTION_TASKS_DB_ID, NOTION_PROJECTS_DB_ID, notionHeaders } from '@/lib/notion-config';
-
-const CONTACTS_DB_ID = 'c812f778-cd65-413f-8feb-5cbc4fbb5dd8';
+import { NOTION_API_KEY, NOTION_DOSSIERS_DB_ID, NOTION_TASKS_DB_ID, NOTION_PROJECTS_DB_ID, NOTION_NOTION_CONTACTS_DB_ID, notionHeaders } from '@/lib/notion-config';
 
 async function fetchPage(pageId) {
   const res = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
@@ -65,7 +63,7 @@ async function fetchTasks(dossierId) {
 }
 
 async function fetchContacts(dossierId) {
-  const res = await fetch(`https://api.notion.com/v1/databases/${CONTACTS_DB_ID}/query`, {
+  const res = await fetch(`https://api.notion.com/v1/databases/${NOTION_CONTACTS_DB_ID}/query`, {
     method: 'POST',
     headers: notionHeaders(),
     body: JSON.stringify({

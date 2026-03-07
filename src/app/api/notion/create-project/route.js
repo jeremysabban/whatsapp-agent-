@@ -4,9 +4,21 @@ import { insertAgentLog, invalidateNotionCache } from '@/lib/database';
 
 export async function POST(req) {
   try {
-    const { name, type, priority, niveau, dossierId, dossierName, conversationJid, conversationName } = await req.json();
+    const { name, type, typeProjet, priority, niveau, dossierId, dossierName, contactId, contratId, conversationJid, conversationName } = await req.json();
 
     if (!name) return NextResponse.json({ error: 'Nom de projet requis' }, { status: 400 });
+
+    // Resolve dossier from contact if not provided directly
+    let resolvedDossierId = dossierId;
+    if (!resolvedDossierId && contactId) {
+      try {
+        const contactRes = await fetch(`https://api.notion.com/v1/pages/${contactId}`, { headers: notionHeaders() });
+        if (contactRes.ok) {
+          const contactPage = await contactRes.json();
+          resolvedDossierId = contactPage.properties['💬 Dossier']?.relation?.[0]?.id || null;
+        }
+      } catch {}
+    }
 
     const properties = {
       'Name': { title: [{ text: { content: name } }] },
@@ -19,10 +31,26 @@ export async function POST(req) {
       properties['Niveau du Projet'] = { select: { name: niveau } }; // select, not status
     }
 
-    if (dossierId) {
+    if (resolvedDossierId) {
       properties['💬 Dossiers'] = {
-        relation: [{ id: dossierId }]
+        relation: [{ id: resolvedDossierId }]
       };
+    }
+
+    if (contactId) {
+      properties['👤 Contacts'] = {
+        relation: [{ id: contactId }]
+      };
+    }
+
+    if (contratId) {
+      properties['⭐ Contrats'] = {
+        relation: [{ id: contratId }]
+      };
+    }
+
+    if (typeProjet) {
+      properties['Type de projet'] = { select: { name: typeProjet } };
     }
 
     const res = await fetch(`https://api.notion.com/v1/pages`, {
@@ -42,8 +70,8 @@ export async function POST(req) {
     }
 
     // Invalidate cache for this dossier
-    if (dossierId) {
-      invalidateNotionCache(dossierId);
+    if (resolvedDossierId) {
+      invalidateNotionCache(resolvedDossierId);
     }
 
     const dossierInfo = dossierName ? ` — Dossier ${dossierName}` : '';

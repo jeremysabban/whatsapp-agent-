@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server';
-
-const NOTION_TOKEN = process.env.NOTION_API_KEY;
-const PROJETS_DB_ID = process.env.NOTION_PROJETS_DB_ID; // Base Projets Notion
+import { NOTION_PROJECTS_DB_ID, notionHeaders } from '@/lib/notion-config';
 
 export async function GET(request) {
   try {
@@ -12,23 +10,19 @@ export async function GET(request) {
       return NextResponse.json({ projects: [] });
     }
 
-    if (!NOTION_TOKEN || !PROJETS_DB_ID) {
+    if (!NOTION_PROJECTS_DB_ID) {
       return NextResponse.json({ projects: [], error: 'Notion not configured' });
     }
 
     // Query Projets database filtering by dossier relation and not terminated
-    const response = await fetch(`https://api.notion.com/v1/databases/${PROJETS_DB_ID}/query`, {
+    const response = await fetch(`https://api.notion.com/v1/databases/${NOTION_PROJECTS_DB_ID}/query`, {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${NOTION_TOKEN}`,
-        'Content-Type': 'application/json',
-        'Notion-Version': '2022-06-28',
-      },
+      headers: notionHeaders(),
       body: JSON.stringify({
         filter: {
           and: [
             {
-              property: 'Dossier',
+              property: '💬 Dossiers',
               relation: {
                 contains: dossierId,
               },

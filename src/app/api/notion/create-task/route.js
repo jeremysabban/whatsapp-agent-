@@ -1,22 +1,23 @@
 import { NextResponse } from 'next/server';
 import { NOTION_TASKS_DB_ID, notionHeaders } from '@/lib/notion-config';
-import { insertAgentLog, invalidateNotionCache } from '@/lib/database';
 
-export async function POST(req) {
+export async function POST(request) {
   try {
-    const { name, priority, date, dossierId, dossierName, conversationJid, conversationName, projectId } = await req.json();
+    const { name, dossierId, projectId } = await request.json();
 
-    if (!name) return NextResponse.json({ error: 'Nom de tâche requis' }, { status: 400 });
-
-    const properties = {
-      'Tâche': { title: [{ text: { content: name } }] },
-      'Statut': { checkbox: false }, // checkbox, not status
-      'Priorité': { status: { name: priority || 'À prioriser' } }, // status, not select
-    };
-
-    if (date) {
-      properties['Date'] = { date: { start: date } };
+    if (!name) {
+      return NextResponse.json({ error: 'Task name required' }, { status: 400 });
     }
+
+    // Build properties
+    const properties = {
+      'Tâche': {
+        title: [{ text: { content: name } }]
+      },
+      'Statut': {
+        checkbox: false
+      }
+    };
 
     // Link to dossier if provided
     if (dossierId) {
@@ -32,44 +33,34 @@ export async function POST(req) {
       };
     }
 
-    const res = await fetch(`https://api.notion.com/v1/pages`, {
+    const res = await fetch('https://api.notion.com/v1/pages', {
       method: 'POST',
       headers: notionHeaders(),
       body: JSON.stringify({
         parent: { database_id: NOTION_TASKS_DB_ID },
-        properties,
-      }),
+        properties
+      })
     });
 
-    const data = await res.json();
-
     if (!res.ok) {
-      console.error('[Notion] Create task error:', data);
-      return NextResponse.json({ error: data.message || 'Erreur Notion' }, { status: res.status });
+      const err = await res.json();
+      console.error('Notion create task error:', err);
+      return NextResponse.json({ error: err.message }, { status: 500 });
     }
 
-    // Invalidate cache for this dossier
-    if (dossierId) {
-      invalidateNotionCache(dossierId);
-    }
-
-    // Log the action
-    const dossierInfo = dossierName ? ` — Dossier ${dossierName}` : '';
-    insertAgentLog(
-      'task_created',
-      `Création tâche "${name}" — Priorité ${priority || 'À prioriser'}${dossierInfo}`,
-      conversationJid || null,
-      conversationName || null,
-      { taskName: name, priority, date, dossierId, dossierName, projectId, notionPageId: data.id }
-    );
+    const page = await res.json();
 
     return NextResponse.json({
       success: true,
-      taskId: data.id,
-      url: data.url,
+      task: {
+        id: page.id,
+        name,
+        url: page.url
+      }
     });
-  } catch (err) {
-    console.error('[Notion] Create task error:', err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+
+  } catch (error) {
+    console.error('Erreur create-task:', error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

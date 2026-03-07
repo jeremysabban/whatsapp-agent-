@@ -8,7 +8,7 @@ if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
 let _db = null;
 
-function getDb() {
+export function getDb() {
   if (!_db) {
     _db = new Database(DB_PATH);
     _db.pragma('journal_mode = WAL');
@@ -97,8 +97,10 @@ function getDb() {
       data TEXT NOT NULL,
       updated_at INTEGER NOT NULL
     )`);
-    // Migrate old statuses to hsva
-    _db.exec(`UPDATE conversations SET status = 'hsva' WHERE status NOT IN ('client', 'assurance', 'prospect', 'hsva') OR status IS NULL`);
+    // Migrate old/null statuses to inbox (default) — never touch hsva or existing valid statuses
+    _db.exec(`UPDATE conversations SET status = 'inbox' WHERE status NOT IN ('client', 'assurance', 'prospect', 'apporteur', 'hsva', 'inbox') OR status IS NULL`);
+    // Move orphan prospects (no linked Notion contact) to inbox
+    _db.exec(`UPDATE conversations SET status = 'inbox' WHERE status = 'prospect' AND notion_contact_id IS NULL`);
   }
   return _db;
 }
@@ -119,7 +121,10 @@ function getAvatarColor(jid) {
 
 // Display name based on source: contact > dossier > manual > whatsapp
 export function getDisplayName(conv) {
-  const fallback = conv.whatsapp_name || conv.phone || conv.jid?.split('@')[0] || 'Inconnu';
+  // Utiliser 'name' s'il existe et n'est pas un numéro de téléphone
+  const nameIsValid = conv.name && !/^\+?\d{6,}$/.test(conv.name) && conv.name !== 'Inconnu';
+  const fallback = (nameIsValid ? conv.name : null) || conv.whatsapp_name || conv.phone || conv.jid?.split('@')[0] || 'Inconnu';
+
   switch (conv.name_source) {
     case 'contact':
       return conv.notion_contact_name || conv.notion_dossier_name || conv.custom_name || fallback;
@@ -133,11 +138,27 @@ export function getDisplayName(conv) {
   }
 }
 
+// Normalize tag_projects: old {Lead: {id,name,url}} → new {Lead: [{id,name,url}]}
+function normalizeTagProjects(tp) {
+  if (!tp || typeof tp !== 'object') return {};
+  const result = {};
+  for (const [key, val] of Object.entries(tp)) {
+    if (Array.isArray(val)) {
+      result[key] = val;
+    } else if (val && typeof val === 'object' && val.id) {
+      result[key] = [val];
+    } else {
+      result[key] = [];
+    }
+  }
+  return result;
+}
+
 // Enrich conversation with display_name for frontend
 function enrichConversation(r) {
   if (!r) return r;
   r.tags = r.tags ? JSON.parse(r.tags) : [];
-  r.tag_projects = r.tag_projects ? JSON.parse(r.tag_projects) : {};
+  r.tag_projects = normalizeTagProjects(r.tag_projects ? JSON.parse(r.tag_projects) : {});
   r.starred = r.starred === 1;
   r.display_name = getDisplayName(r);
   r.display_initials = getInitials(r.display_name);
@@ -184,7 +205,11 @@ export function getConversations({ labelName, timePeriod } = {}) {
   let q = `SELECT c.*,
     (SELECT COUNT(*) FROM documents d WHERE d.conversation_jid=c.jid) as document_count,
     (SELECT COUNT(*) FROM documents d WHERE d.conversation_jid=c.jid AND d.status!='traite') as pending_docs,
-    (SELECT GROUP_CONCAT(wl.name,'||') FROM wa_label_associations wla JOIN wa_labels wl ON wla.label_id=wl.id WHERE wla.chat_jid=c.jid) as label_names
+    (SELECT GROUP_CONCAT(wl.name,'||') FROM wa_label_associations wla JOIN wa_labels wl ON wla.label_id=wl.id WHERE wla.chat_jid=c.jid) as label_names,
+    (SELECT m.text FROM messages m WHERE m.conversation_jid=c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_msg_text,
+    (SELECT m.timestamp FROM messages m WHERE m.conversation_jid=c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_msg_time,
+    (SELECT m.from_me FROM messages m WHERE m.conversation_jid=c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_msg_from_me,
+    (SELECT m.message_type FROM messages m WHERE m.conversation_jid=c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_msg_type
     FROM conversations c WHERE (c.last_message_time >= ? OR c.last_message_time IS NULL)`;
   const p = [cutoff];
   if (labelName) {
@@ -193,10 +218,16 @@ export function getConversations({ labelName, timePeriod } = {}) {
   }
   const tc = timeCutoff(timePeriod);
   if (tc) { q += ` AND c.last_message_time >= ?`; p.push(tc); }
-  q += ` ORDER BY c.last_message_time DESC NULLS LAST`;
+  q += ` ORDER BY COALESCE(last_msg_time, c.last_message_time) DESC NULLS LAST`;
   return db.prepare(q).all(...p).map(r => {
     const conv = enrichConversation(r);
     conv.labels = r.label_names ? r.label_names.split('||').filter(Boolean) : [];
+    if (r.last_msg_time) {
+      conv.last_message = r.last_msg_text;
+      conv.last_message_time = r.last_msg_time;
+      conv.last_message_from_me = r.last_msg_from_me === 1;
+      conv.last_message_type = r.last_msg_type || 'text';
+    }
     return conv;
   });
 }
@@ -207,16 +238,26 @@ export function getTaggedConversations({ timePeriod } = {}) {
   let q = `SELECT c.*,
     (SELECT COUNT(*) FROM documents d WHERE d.conversation_jid=c.jid) as document_count,
     (SELECT COUNT(*) FROM documents d WHERE d.conversation_jid=c.jid AND d.status!='traite') as pending_docs,
-    (SELECT GROUP_CONCAT(wl.name,'||') FROM wa_label_associations wla JOIN wa_labels wl ON wla.label_id=wl.id WHERE wla.chat_jid=c.jid) as label_names
+    (SELECT GROUP_CONCAT(wl.name,'||') FROM wa_label_associations wla JOIN wa_labels wl ON wla.label_id=wl.id WHERE wla.chat_jid=c.jid) as label_names,
+    (SELECT m.text FROM messages m WHERE m.conversation_jid=c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_msg_text,
+    (SELECT m.timestamp FROM messages m WHERE m.conversation_jid=c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_msg_time,
+    (SELECT m.from_me FROM messages m WHERE m.conversation_jid=c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_msg_from_me,
+    (SELECT m.message_type FROM messages m WHERE m.conversation_jid=c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_msg_type
     FROM conversations c WHERE (c.last_message_time >= ? OR c.last_message_time IS NULL)
     AND EXISTS (SELECT 1 FROM wa_label_associations wla JOIN wa_labels wl ON wla.label_id=wl.id WHERE wla.chat_jid=c.jid AND LOWER(wl.name) IN ('client','assurance','prospect'))`;
   const p = [cutoff];
   const tc = timeCutoff(timePeriod);
   if (tc) { q += ` AND c.last_message_time >= ?`; p.push(tc); }
-  q += ` ORDER BY c.last_message_time DESC NULLS LAST`;
+  q += ` ORDER BY COALESCE(last_msg_time, c.last_message_time) DESC NULLS LAST`;
   return db.prepare(q).all(...p).map(r => {
     const conv = enrichConversation(r);
     conv.labels = r.label_names ? r.label_names.split('||').filter(Boolean) : [];
+    if (r.last_msg_time) {
+      conv.last_message = r.last_msg_text;
+      conv.last_message_time = r.last_msg_time;
+      conv.last_message_from_me = r.last_msg_from_me === 1;
+      conv.last_message_type = r.last_msg_type || 'text';
+    }
     return conv;
   });
 }
@@ -250,19 +291,33 @@ export function insertMessage(id, jid, fromMe, senderName, text, ts, msgType, is
   db.prepare('INSERT INTO messages (id,conversation_jid,from_me,sender_name,text,timestamp,message_type,is_document,document_id,raw_data) VALUES (?,?,?,?,?,?,?,?,?,?)').run(id, jid, fromMe?1:0, senderName, text, ts, msgType, isDoc?1:0, docId, raw);
 }
 
-export function getMessages(jid, limit=100, offset=0) {
-  return getDb().prepare('SELECT * FROM messages WHERE conversation_jid=? ORDER BY timestamp ASC LIMIT ? OFFSET ?').all(jid, limit, offset);
+export function getMessages(jid, limit=200, offset=0) {
+  // Get the most recent messages, then reverse for chronological display
+  const messages = getDb().prepare('SELECT * FROM messages WHERE conversation_jid=? ORDER BY timestamp DESC LIMIT ? OFFSET ?').all(jid, limit, offset);
+  return messages.reverse();
 }
 
 export function insertDocument(id, jid, msgId, filename, mimetype, fileSize, localPath) {
   getDb().prepare('INSERT OR IGNORE INTO documents (id,conversation_jid,message_id,filename,mimetype,file_size,local_path,created_at) VALUES (?,?,?,?,?,?,?,?)').run(id, jid, msgId, filename, mimetype, fileSize, localPath, Date.now());
 }
 
-export function getDocuments(jid=null, status=null) {
-  let q = 'SELECT d.*,c.name as conversation_name,c.avatar_initials,c.avatar_color FROM documents d JOIN conversations c ON d.conversation_jid=c.jid';
+export function getDocuments(jid=null, status=null, excludeProcessed=true) {
+  let q = `SELECT d.*,
+    COALESCE(c.notion_dossier_name, c.notion_contact_name, c.custom_name, c.whatsapp_name, c.name) as conversation_name,
+    c.notion_dossier_name, c.notion_contact_name,
+    c.avatar_initials, c.avatar_color, c.status as contact_status
+    FROM documents d JOIN conversations c ON d.conversation_jid=c.jid`;
   const conds=[], params=[];
   if (jid) { conds.push('d.conversation_jid=?'); params.push(jid); }
   if (status) { conds.push('d.status=?'); params.push(status); }
+  // Exclude processed documents and HSVA contacts by default
+  if (excludeProcessed) {
+    conds.push("d.status != 'traite'");
+    conds.push("c.status != 'hsva'");
+  }
+  // Always exclude audio files (voice notes, music, etc.)
+  conds.push("d.mimetype NOT LIKE '%audio%'");
+  conds.push("d.filename NOT LIKE '%.ogg'");
   if (conds.length) q += ' WHERE ' + conds.join(' AND ');
   q += ' ORDER BY d.created_at DESC';
   return getDb().prepare(q).all(...params);
@@ -285,7 +340,7 @@ export function getLinkedDossier(jid) {
 
 export function getStats() {
   const db = getDb();
-  const c = db.prepare(`SELECT COUNT(*) as total, SUM(CASE WHEN status='nouveau' THEN 1 ELSE 0 END) as nouveau, SUM(CASE WHEN status='en_attente' THEN 1 ELSE 0 END) as en_attente, SUM(CASE WHEN status='doc_a_traiter' THEN 1 ELSE 0 END) as doc_a_traiter, SUM(CASE WHEN status='en_cours' THEN 1 ELSE 0 END) as en_cours, SUM(CASE WHEN status='resolu' THEN 1 ELSE 0 END) as resolu, SUM(CASE WHEN priority='high' AND status!='resolu' THEN 1 ELSE 0 END) as urgents, SUM(unread_count) as total_unread FROM conversations`).get();
+  const c = db.prepare(`SELECT COUNT(*) as total, SUM(CASE WHEN status='client' THEN 1 ELSE 0 END) as client, SUM(CASE WHEN status='assurance' THEN 1 ELSE 0 END) as assurance, SUM(CASE WHEN status='prospect' THEN 1 ELSE 0 END) as prospect, SUM(CASE WHEN status='apporteur' THEN 1 ELSE 0 END) as apporteur, SUM(CASE WHEN status='hsva' THEN 1 ELSE 0 END) as hsva, SUM(CASE WHEN status='inbox' THEN 1 ELSE 0 END) as inbox, SUM(CASE WHEN priority='high' AND status!='hsva' THEN 1 ELSE 0 END) as urgents, SUM(unread_count) as total_unread FROM conversations`).get();
   const d = db.prepare(`SELECT COUNT(*) as total_docs, SUM(CASE WHEN status!='traite' THEN 1 ELSE 0 END) as pending_docs FROM documents`).get();
   return { ...c, ...d };
 }
@@ -407,8 +462,14 @@ export function setNameSource(jid, source) {
 }
 
 export function linkNotionContact(jid, contactId, contactName, contactUrl) {
-  getDb().prepare('UPDATE conversations SET notion_contact_id=?, notion_contact_name=?, notion_contact_url=?, name_source=?, updated_at=? WHERE jid=?')
+  const db = getDb();
+  db.prepare(`UPDATE conversations SET notion_contact_id=?, notion_contact_name=?, notion_contact_url=?, name_source=?, status = CASE WHEN status = 'inbox' THEN 'prospect' ELSE status END, updated_at=? WHERE jid=?`)
     .run(contactId, contactName, contactUrl, 'contact', Date.now(), jid);
+}
+
+export function findJidByNotionContactId(notionContactId) {
+  const row = getDb().prepare('SELECT jid FROM conversations WHERE notion_contact_id = ?').get(notionContactId);
+  return row ? row.jid : null;
 }
 
 export function unlinkNotionContact(jid) {
