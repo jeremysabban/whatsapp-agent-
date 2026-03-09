@@ -1,10 +1,35 @@
 import { NextResponse } from 'next/server';
 import { NOTION_DOSSIERS_DB_ID, NOTION_API_KEY, notionHeaders } from '@/lib/notion-config';
+import { getCache, startScheduler } from '@/lib/notion-cache';
+
+// Ensure scheduler is started
+let initialized = false;
+function ensureInit() {
+  if (!initialized) {
+    startScheduler();
+    initialized = true;
+  }
+}
 
 export async function GET(request) {
   try {
+    ensureInit();
     const { searchParams } = new URL(request.url);
     const search = searchParams.get('search') || '';
+
+    // Try cache first
+    const cached = getCache('dossiers');
+    if (cached?.data && !search) {
+      console.log('[DOSSIERS] Using cached data');
+      return NextResponse.json({
+        dossiers: cached.data,
+        fromCache: true,
+        lastUpdate: cached.lastUpdate
+      });
+    }
+
+    // Fallback to fresh fetch (or when search is provided)
+    console.log('[DOSSIERS] Fetching fresh data');
 
     // Build filter
     let filter = undefined;
@@ -55,7 +80,7 @@ export async function GET(request) {
       };
     });
 
-    return NextResponse.json({ dossiers });
+    return NextResponse.json({ dossiers, fromCache: false });
 
   } catch (error) {
     console.error('Erreur GET dossiers:', error);
