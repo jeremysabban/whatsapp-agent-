@@ -1,56 +1,22 @@
 import { NextResponse } from 'next/server';
-import { NOTION_TASKS_DB_ID, notionHeaders } from '@/lib/notion-config';
+import { getCache, startScheduler } from '@/lib/notion-cache';
 import { getConversations, getDisplayName } from '@/lib/database';
 
-async function fetchTasks(completed = false) {
-  const filter = completed
-    ? { property: 'Statut', checkbox: { equals: true } }
-    : { property: 'Statut', checkbox: { equals: false } };
-
-  const res = await fetch(`https://api.notion.com/v1/databases/${NOTION_TASKS_DB_ID}/query`, {
-    method: 'POST',
-    headers: notionHeaders(),
-    body: JSON.stringify({
-      filter,
-      sorts: [{ property: 'Date', direction: 'ascending' }],
-      page_size: 100,
-    }),
-  });
-
-  if (!res.ok) {
-    const error = await res.json();
-    console.error('[Notion] Fetch tasks error:', error);
-    return [];
-  }
-
-  const data = await res.json();
-  return data.results;
-}
-
-async function fetchPageTitle(pageId) {
-  try {
-    const res = await fetch(`https://api.notion.com/v1/pages/${pageId}`, { headers: notionHeaders() });
-    if (!res.ok) return null;
-    const page = await res.json();
-    const props = page.properties;
-    const title = props['Name']?.title?.[0]?.plain_text
-      || props['Nom']?.title?.[0]?.plain_text
-      || props['Nom du dossier']?.title?.[0]?.plain_text
-      || props['Tâche']?.title?.[0]?.plain_text
-      || 'Sans nom';
-    return { id: pageId, name: title, url: page.url };
-  } catch {
-    return null;
+// Ensure scheduler is started
+let initialized = false;
+function ensureInit() {
+  if (!initialized) {
+    startScheduler();
+    initialized = true;
   }
 }
 
 function getEisenhowerQuadrant(priority) {
-  // Map priority status to Eisenhower quadrant
   switch (priority) {
-    case 'Urg & Imp': return 'faire';      // 🔴 Urgent + Important
-    case 'Important': return 'planifier';   // 🟡 Important, not urgent
-    case 'Urgent': return 'deleguer';       // 🟠 Urgent, not important
-    case 'Secondaire': return 'eliminer';   // ⚪ Neither
+    case 'Urg & Imp': return 'faire';
+    case 'Important': return 'planifier';
+    case 'Urgent': return 'deleguer';
+    case 'Secondaire': return 'eliminer';
     case 'En attente': return 'attente';
     case 'À prioriser': return 'aprioriser';
     default: return 'aprioriser';
@@ -59,16 +25,20 @@ function getEisenhowerQuadrant(priority) {
 
 export async function GET(request) {
   try {
+    ensureInit();
     const { searchParams } = new URL(request.url);
     const includeCompleted = searchParams.get('completed') === 'true';
 
-    // Fetch open tasks, and optionally completed tasks
-    const [openTasks, completedTasks] = await Promise.all([
-      fetchTasks(false),
-      includeCompleted ? fetchTasks(true) : Promise.resolve([]),
-    ]);
+    // Get cached data
+    const cachedTasks = getCache('tasks');
+    const cachedProjects = getCache('projects');
+    const cachedDossiers = getCache('dossiers');
 
-    const tasksRaw = [...openTasks, ...completedTasks];
+    if (!cachedTasks?.data) {
+      return NextResponse.json({ tasks: [], message: 'Cache loading...' });
+    }
+
+    console.log('[ALL-TASKS] Using cached data');
 
     // Get all conversations to match dossier IDs with contacts
     const conversations = getConversations({});
@@ -77,82 +47,66 @@ export async function GET(request) {
       if (conv.notion_dossier_id) {
         dossierToConversation[conv.notion_dossier_id] = {
           jid: conv.jid,
-          name: getDisplayName(conv), // Use display name hierarchy
+          name: getDisplayName(conv),
           avatar_initials: conv.avatar_initials,
           avatar_color: conv.avatar_color,
         };
       }
     }
 
-    // Collect unique project and dossier IDs to fetch
-    const projectIds = new Set();
-    const dossierIds = new Set();
+    // Build project and dossier maps from cache
+    const projectsMap = {};
+    (cachedProjects?.data || []).forEach(p => {
+      projectsMap[p.id] = { id: p.id, name: p.name, url: p.url };
+    });
 
-    for (const task of tasksRaw) {
-      const projectId = task.properties['Projet']?.relation?.[0]?.id;
-      const dossierId = task.properties['💬 Dossiers']?.relation?.[0]?.id;
-      if (projectId) projectIds.add(projectId);
-      if (dossierId) dossierIds.add(dossierId);
-    }
-
-    // Fetch project and dossier names in parallel
-    const [projectsMap, dossiersMap] = await Promise.all([
-      Promise.all([...projectIds].map(async id => [id, await fetchPageTitle(id)])).then(arr => Object.fromEntries(arr)),
-      Promise.all([...dossierIds].map(async id => [id, await fetchPageTitle(id)])).then(arr => Object.fromEntries(arr)),
-    ]);
+    const dossiersMap = {};
+    (cachedDossiers?.data || []).forEach(d => {
+      dossiersMap[d.id] = { id: d.id, name: d.name, url: d.url };
+    });
 
     // Build tasks with enriched data
-    const tasks = tasksRaw.map(t => {
-      const projectId = t.properties['Projet']?.relation?.[0]?.id;
-      const dossierId = t.properties['💬 Dossiers']?.relation?.[0]?.id;
-      const dueDate = t.properties['Date']?.date?.start || null;
-      const completed = t.properties['Statut']?.checkbox || false;
-      const priority = t.properties['Priorité']?.status?.name || 'À prioriser';
+    const tasks = cachedTasks.data.map(t => {
+      const priority = t.priority || 'À prioriser';
       const quadrant = getEisenhowerQuadrant(priority);
 
       // Determine if overdue or due today
       let dateStatus = null;
-      if (dueDate && !completed) {
+      if (t.date && !t.completed) {
         const today = new Date().toISOString().split('T')[0];
-        if (dueDate < today) dateStatus = 'overdue';
-        else if (dueDate === today) dateStatus = 'today';
+        if (t.date < today) dateStatus = 'overdue';
+        else if (t.date === today) dateStatus = 'today';
       }
-
-      // Get last edited time for completed tasks
-      const completedAt = completed ? t.last_edited_time : null;
 
       return {
         id: t.id,
-        name: t.properties['Tâche']?.title?.[0]?.plain_text || 'Sans nom',
-        completed,
+        name: t.name || 'Sans nom',
+        completed: t.completed,
         priority,
         quadrant,
-        date: dueDate,
+        date: t.date,
         dateStatus,
-        completedAt,
+        completedAt: t.completed ? t.createdAt : null,
+        createdAt: t.createdAt,
+        note: t.note,
         url: t.url,
-        project: projectId ? projectsMap[projectId] : null,
-        dossier: dossierId ? dossiersMap[dossierId] : null,
-        dossierId,
-        contact: dossierId ? dossierToConversation[dossierId] || null : null,
+        project: t.projectId ? projectsMap[t.projectId] : null,
+        dossier: t.dossierId ? dossiersMap[t.dossierId] : null,
+        dossierId: t.dossierId,
+        contact: t.dossierId ? dossierToConversation[t.dossierId] || null : null,
       };
     });
 
-    // Filter completed tasks to last 7 days only
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    const sevenDaysAgoStr = sevenDaysAgo.toISOString();
+    // Filter by completion status
+    let filteredTasks = includeCompleted
+      ? tasks
+      : tasks.filter(t => !t.completed);
 
-    const filteredTasks = tasks.filter(t => {
-      if (!t.completed) return true;
-      return t.completedAt && t.completedAt >= sevenDaysAgoStr;
-    });
-
-    // Sort: open tasks by date, completed by completedAt desc
+    // Sort: open tasks by date, completed by createdAt desc
     filteredTasks.sort((a, b) => {
       if (a.completed !== b.completed) return a.completed ? 1 : -1;
       if (a.completed) {
-        return (b.completedAt || '').localeCompare(a.completedAt || '');
+        return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
       }
       if (!a.date && !b.date) return 0;
       if (!a.date) return 1;
@@ -160,7 +114,11 @@ export async function GET(request) {
       return a.date.localeCompare(b.date);
     });
 
-    return NextResponse.json({ tasks: filteredTasks });
+    return NextResponse.json({
+      tasks: filteredTasks,
+      fromCache: true,
+      lastUpdate: cachedTasks.lastUpdate
+    });
   } catch (error) {
     console.error('All tasks error:', error);
     return NextResponse.json({ error: error.message, tasks: [] }, { status: 500 });
