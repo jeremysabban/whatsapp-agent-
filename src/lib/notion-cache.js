@@ -1,16 +1,24 @@
 // Notion Cache System - Keeps data in memory with scheduled refresh
 import { notionHeaders, NOTION_DOSSIERS_DB_ID, NOTION_CONTACTS_DB_ID, NOTION_TASKS_DB_ID, NOTION_PROJECTS_DB_ID } from './notion-config.js';
 
-// In-memory cache
-const cache = {
-  contacts: { data: null, lastUpdate: null },
-  dossiers: { data: null, lastUpdate: null },
-  tasks: { data: null, lastUpdate: null },
-  projects: { data: null, lastUpdate: null },
-};
+// Use global to persist cache across Next.js hot reloads in dev mode
+const globalCache = globalThis;
 
-// Scheduler state
-let schedulerStarted = false;
+if (!globalCache._notionCache) {
+  globalCache._notionCache = {
+    contacts: { data: null, lastUpdate: null },
+    dossiers: { data: null, lastUpdate: null },
+    tasks: { data: null, lastUpdate: null },
+    projects: { data: null, lastUpdate: null },
+  };
+}
+
+if (!globalCache._schedulerStarted) {
+  globalCache._schedulerStarted = false;
+}
+
+// Reference the global cache
+const cache = globalCache._notionCache;
 
 // Fetch all pages from a Notion database with pagination
 async function fetchAllPages(databaseId, filter = {}, sorts = []) {
@@ -214,8 +222,8 @@ function shouldAutoRefresh() {
 
 // Start the scheduler (called once on app start)
 export function startScheduler() {
-  if (schedulerStarted) return;
-  schedulerStarted = true;
+  if (globalCache._schedulerStarted) return;
+  globalCache._schedulerStarted = true;
 
   console.log('[CACHE] Scheduler started - will refresh at 8h, 13h, 19h (Paris time)');
 
