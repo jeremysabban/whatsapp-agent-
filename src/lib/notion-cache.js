@@ -100,16 +100,29 @@ async function refreshTasks() {
     const results = await fetchAllPages(NOTION_TASKS_DB_ID, {}, [
       { timestamp: 'created_time', direction: 'descending' }
     ]);
-    const tasks = results.map(page => ({
-      id: page.id,
-      name: page.properties['Tâche']?.title?.[0]?.plain_text || '',
-      completed: page.properties['Statut']?.checkbox || false,
-      priority: page.properties['Priorité']?.status?.name || page.properties['Priorité']?.select?.name || '',
-      date: page.properties['Date']?.date?.start || null,
-      dossierId: page.properties['💬 Dossiers']?.relation?.[0]?.id || null,
-      projectId: page.properties['Projet']?.relation?.[0]?.id || null,
-      url: page.url,
-    }));
+    const tasks = results.map(page => {
+      // Extract note from various possible property names
+      const noteProps = ['Note', 'Notes', 'Description', 'Détails', 'Commentaire'];
+      let note = '';
+      for (const prop of noteProps) {
+        const richText = page.properties[prop]?.rich_text;
+        if (richText?.length > 0) {
+          note = richText.map(t => t.plain_text).join('');
+          break;
+        }
+      }
+      return {
+        id: page.id,
+        name: page.properties['Tâche']?.title?.[0]?.plain_text || '',
+        completed: page.properties['Statut']?.checkbox || false,
+        priority: page.properties['Priorité']?.status?.name || page.properties['Priorité']?.select?.name || '',
+        date: page.properties['Date']?.date?.start || null,
+        dossierId: page.properties['💬 Dossiers']?.relation?.[0]?.id || null,
+        projectId: page.properties['Projet']?.relation?.[0]?.id || null,
+        note,
+        url: page.url,
+      };
+    });
     cache.tasks = { data: tasks, lastUpdate: new Date() };
     console.log(`[CACHE] Tasks refreshed: ${tasks.length} items`);
     return tasks;

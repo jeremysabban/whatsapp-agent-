@@ -2138,17 +2138,20 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
                                     const dateStatus = getDateStatus(t.date);
                                     const isCompleted = t.completed || t.status === 'Terminé' || t.status === 'Done';
                                     return (
-                                      <div key={t.id} className="flex items-center gap-2 py-1.5 px-2 hover:bg-gray-50 rounded transition-colors group">
-                                        <input
-                                          type="checkbox"
-                                          checked={isCompleted}
-                                          disabled={togglingTaskId === t.id}
-                                          onChange={(e) => { e.stopPropagation(); toggleTaskCompletion(t, e.target.checked); }}
-                                          className="w-3.5 h-3.5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500 cursor-pointer disabled:opacity-50"
-                                        />
-                                        <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : ''}</span>
-                                        <a href={t.url} target="_blank" rel="noopener" className={`text-xs flex-1 truncate ${isCompleted ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{t.name}</a>
-                                        {t.date && !isCompleted && <span className={`text-xs ${dateStatus === 'overdue' ? 'text-red-600 font-medium' : dateStatus === 'today' ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
+                                      <div key={t.id} className="py-1.5 px-2 hover:bg-gray-50 rounded transition-colors group">
+                                        <div className="flex items-center gap-2">
+                                          <input
+                                            type="checkbox"
+                                            checked={isCompleted}
+                                            disabled={togglingTaskId === t.id}
+                                            onChange={(e) => { e.stopPropagation(); toggleTaskCompletion(t, e.target.checked); }}
+                                            className="w-3.5 h-3.5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500 cursor-pointer disabled:opacity-50"
+                                          />
+                                          <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : ''}</span>
+                                          <a href={t.url} target="_blank" rel="noopener" className={`text-xs flex-1 truncate ${isCompleted ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{t.name}</a>
+                                          {t.date && !isCompleted && <span className={`text-xs ${dateStatus === 'overdue' ? 'text-red-600 font-medium' : dateStatus === 'today' ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
+                                        </div>
+                                        {t.note && <p className="text-[11px] text-gray-500 ml-6 mt-0.5 line-clamp-2">{t.note}</p>}
                                       </div>
                                     );
                                   })}
@@ -2176,17 +2179,20 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
                           const dateStatus = getDateStatus(t.date);
                           const isCompleted = t.completed || t.status === 'Terminé' || t.status === 'Done';
                           return (
-                            <div key={t.id} className="flex items-center gap-2 p-2 hover:bg-gray-50 rounded-lg transition-colors">
-                              <input
-                                type="checkbox"
-                                checked={isCompleted}
-                                disabled={togglingTaskId === t.id}
-                                onChange={(e) => { e.stopPropagation(); toggleTaskCompletion(t, e.target.checked); }}
-                                className="w-3.5 h-3.5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500 cursor-pointer disabled:opacity-50"
-                              />
-                              <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : ''}</span>
-                              <a href={t.url} target="_blank" rel="noopener" className={`text-xs flex-1 truncate ${isCompleted ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{t.name}</a>
-                              {t.date && !isCompleted && <span className={`text-xs ${dateStatus === 'overdue' ? 'text-red-600 font-medium' : dateStatus === 'today' ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
+                            <div key={t.id} className="p-2 hover:bg-gray-50 rounded-lg transition-colors">
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={isCompleted}
+                                  disabled={togglingTaskId === t.id}
+                                  onChange={(e) => { e.stopPropagation(); toggleTaskCompletion(t, e.target.checked); }}
+                                  className="w-3.5 h-3.5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500 cursor-pointer disabled:opacity-50"
+                                />
+                                <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : ''}</span>
+                                <a href={t.url} target="_blank" rel="noopener" className={`text-xs flex-1 truncate ${isCompleted ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{t.name}</a>
+                                {t.date && !isCompleted && <span className={`text-xs ${dateStatus === 'overdue' ? 'text-red-600 font-medium' : dateStatus === 'today' ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
+                              </div>
+                              {t.note && <p className="text-[11px] text-gray-500 ml-6 mt-0.5 line-clamp-2">{t.note}</p>}
                             </div>
                           );
                         })}
@@ -2354,17 +2360,20 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
                                 {p.tasks.map(t => {
                                   const isCompleted = t.completed || t.status === 'Terminé' || t.status === 'Done';
                                   return (
-                                    <div key={t.id} className="flex items-center gap-2 py-1.5 px-2 hover:bg-gray-50 rounded transition-colors">
-                                      <input
-                                        type="checkbox"
-                                        checked={isCompleted}
-                                        disabled={togglingTaskId === t.id}
-                                        onChange={(e) => { e.stopPropagation(); toggleTaskCompletion(t, e.target.checked); }}
-                                        className="w-3.5 h-3.5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500 cursor-pointer disabled:opacity-50"
-                                      />
-                                      <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : ''}</span>
-                                      <a href={t.url} target="_blank" rel="noopener" className={`text-xs flex-1 truncate ${isCompleted ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{t.name}</a>
-                                      {t.date && !isCompleted && <span className={`text-xs ${getDateStatus(t.date) === 'overdue' ? 'text-red-600 font-medium' : getDateStatus(t.date) === 'today' ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
+                                    <div key={t.id} className="py-1.5 px-2 hover:bg-gray-50 rounded transition-colors">
+                                      <div className="flex items-center gap-2">
+                                        <input
+                                          type="checkbox"
+                                          checked={isCompleted}
+                                          disabled={togglingTaskId === t.id}
+                                          onChange={(e) => { e.stopPropagation(); toggleTaskCompletion(t, e.target.checked); }}
+                                          className="w-3.5 h-3.5 rounded border-gray-300 text-emerald-500 focus:ring-emerald-500 cursor-pointer disabled:opacity-50"
+                                        />
+                                        <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : ''}</span>
+                                        <a href={t.url} target="_blank" rel="noopener" className={`text-xs flex-1 truncate ${isCompleted ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{t.name}</a>
+                                        {t.date && !isCompleted && <span className={`text-xs ${getDateStatus(t.date) === 'overdue' ? 'text-red-600 font-medium' : getDateStatus(t.date) === 'today' ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
+                                      </div>
+                                      {t.note && <p className="text-[11px] text-gray-500 ml-6 mt-0.5 line-clamp-2">{t.note}</p>}
                                     </div>
                                   );
                                 })}
