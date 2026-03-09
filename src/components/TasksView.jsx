@@ -30,6 +30,7 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [showCompleted, setShowCompleted] = useState(false);
+  const [sortBy, setSortBy] = useState('creation_desc');
   const [expandedDossiers, setExpandedDossiers] = useState({});
   const [togglingTaskId, setTogglingTaskId] = useState(null);
   const [newTaskModal, setNewTaskModal] = useState(null); // { dossierId, dossierName, projects: [] }
@@ -241,6 +242,35 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
     return filtered;
   }, [tasksWithoutDossier, search, typeFilter]);
 
+  // Sorting function
+  const sortTasks = (tasks) => {
+    return [...tasks].sort((a, b) => {
+      switch (sortBy) {
+        case 'creation_desc': return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+        case 'creation_asc': return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
+        case 'date_asc': {
+          if (!a.date && !b.date) return 0;
+          if (!a.date) return 1;
+          if (!b.date) return -1;
+          return new Date(a.date) - new Date(b.date);
+        }
+        case 'date_desc': {
+          if (!a.date && !b.date) return 0;
+          if (!a.date) return 1;
+          if (!b.date) return -1;
+          return new Date(b.date) - new Date(a.date);
+        }
+        case 'name_asc': return (a.name || '').localeCompare(b.name || '');
+        case 'name_desc': return (b.name || '').localeCompare(a.name || '');
+        default: return 0;
+      }
+    });
+  };
+
+  // Apply sorting to groups
+  const sortedGroups = filteredGroups.map(g => ({ ...g, tasks: sortTasks(g.tasks) }));
+  const sortedOrphanTasks = sortTasks(filteredOrphanTasks);
+
   const totalFiltered = filteredGroups.reduce((acc, g) => acc + g.tasks.length, 0) + filteredOrphanTasks.length;
 
   return (
@@ -292,21 +322,35 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
           />
         </div>
 
-        {/* Type filters */}
-        <div className="flex gap-2">
-          {['all', 'Lead', 'Sinistre', 'Gestion'].map((type) => (
-            <button
-              key={type}
-              onClick={() => setTypeFilter(type)}
-              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                typeFilter === type
-                  ? 'bg-gray-900 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              {type === 'all' ? 'Tous' : type === 'Lead' ? 'Leads' : type === 'Sinistre' ? 'Sinistres' : 'Gestions'}
-            </button>
-          ))}
+        {/* Type filters + Sort */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex gap-2">
+            {['all', 'Lead', 'Sinistre', 'Gestion'].map((type) => (
+              <button
+                key={type}
+                onClick={() => setTypeFilter(type)}
+                className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                  typeFilter === type
+                    ? 'bg-gray-900 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {type === 'all' ? 'Tous' : type === 'Lead' ? 'Leads' : type === 'Sinistre' ? 'Sinistres' : 'Gestions'}
+              </button>
+            ))}
+          </div>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="text-xs bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 cursor-pointer hover:bg-gray-100"
+          >
+            <option value="creation_desc">📅 Plus récent</option>
+            <option value="creation_asc">📅 Plus ancien</option>
+            <option value="date_asc">⏰ Échéance proche</option>
+            <option value="date_desc">⏰ Échéance loin</option>
+            <option value="name_asc">🔤 Nom A-Z</option>
+            <option value="name_desc">🔤 Nom Z-A</option>
+          </select>
         </div>
       </div>
 
@@ -327,7 +371,7 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
         ) : (
           <div className="space-y-4">
             {/* Grouped by dossier */}
-            {filteredGroups.map(group => {
+            {sortedGroups.map(group => {
               const isExpanded = expandedDossiers[group.dossier.id];
               const dossier = group.dossier;
 
@@ -406,13 +450,13 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
             })}
 
             {/* Tasks without dossier */}
-            {filteredOrphanTasks.length > 0 && (
+            {sortedOrphanTasks.length > 0 && (
               <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
                 <div className="p-3 bg-gray-50 border-b border-gray-200">
-                  <span className="font-medium text-gray-700">Sans dossier ({filteredOrphanTasks.length})</span>
+                  <span className="font-medium text-gray-700">Sans dossier ({sortedOrphanTasks.length})</span>
                 </div>
                 <div className="divide-y divide-gray-50">
-                  {filteredOrphanTasks.map(task => (
+                  {sortedOrphanTasks.map(task => (
                     <TaskRow
                       key={task.id}
                       task={task}
@@ -514,6 +558,9 @@ function TaskRow({ task, onToggle, togglingTaskId }) {
         <div className={`text-sm ${task.completed ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
           {task.name}
         </div>
+        {task.note && (
+          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{task.note}</p>
+        )}
         {task.project && (
           <div className="mt-1 flex items-center gap-2">
             <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors.badge}`}>
