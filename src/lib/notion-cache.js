@@ -101,6 +101,35 @@ async function refreshDossiers() {
   }
 }
 
+// Fetch page content (blocks) to extract notes
+async function fetchPageContent(pageId) {
+  try {
+    const response = await fetch(`https://api.notion.com/v1/blocks/${pageId}/children?page_size=20`, {
+      headers: notionHeaders(),
+    });
+    if (!response.ok) return '';
+    const data = await response.json();
+
+    // Extract text from blocks (paragraphs, headings, etc.)
+    const texts = [];
+    for (const block of data.results || []) {
+      const richText = block.paragraph?.rich_text
+        || block.heading_1?.rich_text
+        || block.heading_2?.rich_text
+        || block.heading_3?.rich_text
+        || block.bulleted_list_item?.rich_text
+        || block.numbered_list_item?.rich_text
+        || block.to_do?.rich_text;
+      if (richText?.length > 0) {
+        texts.push(richText.map(t => t.plain_text).join(''));
+      }
+    }
+    return texts.join(' ').substring(0, 500); // Limit to 500 chars
+  } catch {
+    return '';
+  }
+}
+
 // Refresh tasks cache (all tasks, not just open ones)
 async function refreshTasks() {
   console.log('[CACHE] Refreshing tasks...');
@@ -108,8 +137,18 @@ async function refreshTasks() {
     const results = await fetchAllPages(NOTION_TASKS_DB_ID, {}, [
       { timestamp: 'created_time', direction: 'descending' }
     ]);
+
+    // Fetch page content for each task (in batches of 10)
+    console.log('[CACHE] Fetching task content...');
+    const taskContents = {};
+    for (let i = 0; i < results.length; i += 10) {
+      const batch = results.slice(i, i + 10);
+      const contents = await Promise.all(batch.map(p => fetchPageContent(p.id)));
+      batch.forEach((p, idx) => { taskContents[p.id] = contents[idx]; });
+    }
+
     const tasks = results.map(page => {
-      // Extract note from various possible property names
+      // Try property first, then page content
       const noteProps = ['Note', 'Notes', 'Description', 'Détails', 'Commentaire'];
       let note = '';
       for (const prop of noteProps) {
@@ -119,6 +158,11 @@ async function refreshTasks() {
           break;
         }
       }
+      // If no property note, use page content
+      if (!note) {
+        note = taskContents[page.id] || '';
+      }
+
       return {
         id: page.id,
         name: page.properties['Tâche']?.title?.[0]?.plain_text || '',
