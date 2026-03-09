@@ -120,6 +120,7 @@ async function refreshTasks() {
         dossierId: page.properties['💬 Dossiers']?.relation?.[0]?.id || null,
         projectId: page.properties['Projet']?.relation?.[0]?.id || null,
         note,
+        createdAt: page.created_time,
         url: page.url,
       };
     });

@@ -1066,6 +1066,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
     const statusCounts = { client: conversations.filter(c => c.status === 'client').length, assurance: conversations.filter(c => c.status === 'assurance').length, prospect: conversations.filter(c => c.status === 'prospect').length, apporteur: conversations.filter(c => c.status === 'apporteur').length, inbox: conversations.filter(c => c.status === 'inbox').length };
     const [taskTab, setTaskTab] = useState('faire');
     const [updatingTask, setUpdatingTask] = useState(null);
+    const [taskSort, setTaskSort] = useState('creation_desc'); // Sorting option
 
     // Eisenhower quadrants based on priority status
     const EISENHOWER_TABS = [
@@ -1085,6 +1086,30 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
 
     const filteredTasks = getTasksForTab(taskTab);
     const currentTab = EISENHOWER_TABS.find(t => t.id === taskTab);
+
+    // Sort tasks based on selected option
+    const sortedTasks = [...filteredTasks].sort((a, b) => {
+      switch (taskSort) {
+        case 'creation_desc': return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
+        case 'creation_asc': return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
+        case 'date_asc': {
+          if (!a.date && !b.date) return 0;
+          if (!a.date) return 1;
+          if (!b.date) return -1;
+          return new Date(a.date) - new Date(b.date);
+        }
+        case 'date_desc': {
+          if (!a.date && !b.date) return 0;
+          if (!a.date) return 1;
+          if (!b.date) return -1;
+          return new Date(b.date) - new Date(a.date);
+        }
+        case 'name_asc': return (a.name || '').localeCompare(b.name || '');
+        case 'name_desc': return (b.name || '').localeCompare(a.name || '');
+        case 'dossier': return (a.dossier?.name || 'zzz').localeCompare(b.dossier?.name || 'zzz');
+        default: return 0;
+      }
+    });
 
     // Update task in Notion
     const updateTask = async (task, updates) => {
@@ -1190,10 +1215,21 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
         <div className="bg-white rounded-xl border border-gray-200">
           <div className="p-4 border-b border-gray-100 flex items-center justify-between">
             <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Icon name="tasks" className="w-5 h-5 text-blue-500" /> Tâches Notion</h3>
-            <button onClick={loadAllTasks} disabled={loadingAllTasks} className="text-blue-600 text-sm hover:underline flex items-center gap-1">
-              {loadingAllTasks && <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500" />}
-              {loadingAllTasks ? 'Chargement...' : '↻ Actualiser'}
-            </button>
+            <div className="flex items-center gap-3">
+              <select value={taskSort} onChange={e => setTaskSort(e.target.value)} className="text-xs bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 cursor-pointer hover:bg-gray-100">
+                <option value="creation_desc">📅 Plus récent</option>
+                <option value="creation_asc">📅 Plus ancien</option>
+                <option value="date_asc">⏰ Échéance proche</option>
+                <option value="date_desc">⏰ Échéance loin</option>
+                <option value="name_asc">🔤 Nom A-Z</option>
+                <option value="name_desc">🔤 Nom Z-A</option>
+                <option value="dossier">📁 Par dossier</option>
+              </select>
+              <button onClick={loadAllTasks} disabled={loadingAllTasks} className="text-blue-600 text-sm hover:underline flex items-center gap-1">
+                {loadingAllTasks && <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500" />}
+                {loadingAllTasks ? 'Chargement...' : '↻ Actualiser'}
+              </button>
+            </div>
           </div>
           {/* Eisenhower tabs */}
           <div className="flex gap-2 p-3 border-b border-gray-100 overflow-x-auto">
@@ -1208,11 +1244,11 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
           </div>
           {loadingAllTasks ? (
             <div className="p-8 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto" /></div>
-          ) : filteredTasks.length === 0 ? (
+          ) : sortedTasks.length === 0 ? (
             <div className="p-8 text-center text-gray-400 text-sm">Aucune tâche dans cette catégorie</div>
           ) : (
             <div className="divide-y divide-gray-50">
-              {filteredTasks.slice(0, 30).map(t => (
+              {sortedTasks.slice(0, 30).map(t => (
                 <div key={t.id} className={`flex items-center gap-3 px-4 py-3 hover:bg-gray-50 ${updatingTask === t.id ? 'opacity-50' : ''}`}>
                   {/* Checkbox */}
                   <button onClick={() => updateTask(t, { completed: !t.completed })} disabled={updatingTask === t.id} className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${t.completed ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-gray-300 hover:border-emerald-400'}`}>
@@ -1246,7 +1282,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
                   ) : null}
                 </div>
               ))}
-              {filteredTasks.length > 30 && <div className="p-3 text-center text-xs text-gray-400">+{filteredTasks.length - 30} autres tâches</div>}
+              {sortedTasks.length > 30 && <div className="p-3 text-center text-xs text-gray-400">+{sortedTasks.length - 30} autres tâches</div>}
             </div>
           )}
         </div>
