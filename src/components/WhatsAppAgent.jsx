@@ -1525,13 +1525,8 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
     const [detailTab, setDetailTab] = useState('messages'); // 'messages' or 'documents'
     const localInputRef = useRef(null);
 
-    // Get documents from messages (PDFs, docs, etc.)
-    const conversationDocs = selectedMessages.filter(msg =>
-      msg.media_url &&
-      !msg.media_mimetype?.startsWith('image/') &&
-      !msg.media_mimetype?.startsWith('video/') &&
-      !msg.media_mimetype?.startsWith('audio/')
-    );
+    // Get all downloadable media from messages (photos, videos, audios, documents)
+    const conversationDocs = selectedMessages.filter(msg => msg.media_url);
 
     const sendMsg = async () => {
       const text = messageText.trim();
@@ -1833,15 +1828,15 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
                 <button onClick={() => setSuggestedContact(null)} className="text-indigo-300 hover:text-indigo-500 text-xs">✕</button>
               </div>
             )}
-            {/* Tabs: Messages / Documents */}
+            {/* Tabs: Messages / Fichiers */}
             <div className="flex gap-1 mb-2 bg-gray-100 p-1 rounded-lg">
               <button onClick={() => setDetailTab('messages')} className={`flex-1 flex items-center justify-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${detailTab === 'messages' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
                 Messages
               </button>
               <button onClick={() => setDetailTab('documents')} className={`flex-1 flex items-center justify-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${detailTab === 'documents' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                Documents {conversationDocs.length > 0 && <span className="bg-blue-100 text-blue-700 text-xs px-1.5 py-0.5 rounded-full">{conversationDocs.length}</span>}
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                Fichiers {conversationDocs.length > 0 && <span className="bg-blue-100 text-blue-700 text-xs px-1.5 py-0.5 rounded-full">{conversationDocs.length}</span>}
               </button>
             </div>
             {/* Documents Tab */}
@@ -1850,28 +1845,45 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
                 {conversationDocs.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full text-gray-400">
                     <svg className="w-12 h-12 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                    <p className="text-sm">Aucun document dans cette conversation</p>
+                    <p className="text-sm">Aucun média dans cette conversation</p>
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <p className="text-xs text-gray-500 mb-3">{conversationDocs.length} document{conversationDocs.length > 1 ? 's' : ''} trouvé{conversationDocs.length > 1 ? 's' : ''}</p>
+                    <p className="text-xs text-gray-500 mb-3">{conversationDocs.length} fichier{conversationDocs.length > 1 ? 's' : ''}</p>
                     {conversationDocs.map((doc, idx) => {
-                      const filename = doc.text?.replace('📎 ', '') || 'Document';
+                      const filename = doc.text?.replace('📎 ', '') || 'Fichier';
+                      const isImage = doc.media_mimetype?.startsWith('image/');
+                      const isVideo = doc.media_mimetype?.startsWith('video/');
+                      const isAudio = doc.media_mimetype?.startsWith('audio/');
                       const isPdf = doc.media_mimetype?.includes('pdf');
                       const date = new Date(doc.timestamp);
+                      const typeLabel = isImage ? 'IMG' : isVideo ? 'VID' : isAudio ? 'MP3' : isPdf ? 'PDF' : 'DOC';
+                      const typeColor = isImage ? '#10b981' : isVideo ? '#8b5cf6' : isAudio ? '#f59e0b' : isPdf ? '#ef4444' : '#3b82f6';
+                      const typeBg = isImage ? 'bg-emerald-100' : isVideo ? 'bg-purple-100' : isAudio ? 'bg-amber-100' : isPdf ? 'bg-red-100' : 'bg-blue-100';
                       return (
-                        <div key={doc.id || idx} className="flex items-center gap-3 p-3 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200 transition-colors">
-                          <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${isPdf ? 'bg-red-100' : 'bg-blue-100'}`}>
-                            <span className="text-xs font-bold" style={{color: isPdf ? '#ef4444' : '#3b82f6'}}>{isPdf ? 'PDF' : 'DOC'}</span>
-                          </div>
+                        <div key={doc.id || idx} className="flex items-center gap-3 p-2 bg-gray-50 hover:bg-gray-100 rounded-lg border border-gray-200 transition-colors">
+                          {isImage ? (
+                            <img src={doc.media_url} alt="" className="w-12 h-12 rounded-lg object-cover flex-shrink-0" loading="lazy" />
+                          ) : isVideo ? (
+                            <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 ${typeBg} relative overflow-hidden`}>
+                              <video src={doc.media_url} className="absolute inset-0 w-full h-full object-cover opacity-50" muted />
+                              <span className="text-xs font-bold relative z-10" style={{color: typeColor}}>{typeLabel}</span>
+                            </div>
+                          ) : (
+                            <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 ${typeBg}`}>
+                              <span className="text-xs font-bold" style={{color: typeColor}}>{typeLabel}</span>
+                            </div>
+                          )}
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-gray-900 truncate">{filename}</p>
+                            <p className="text-sm font-medium text-gray-900 truncate">{isImage ? 'Photo' : isVideo ? 'Vidéo' : isAudio ? 'Audio' : filename}</p>
                             <p className="text-xs text-gray-400">{date.toLocaleDateString('fr-FR')} à {date.toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'})} · {doc.from_me ? 'Envoyé' : 'Reçu'}</p>
                           </div>
                           <div className="flex gap-1">
-                            <button onClick={() => setPreviewDoc({url: doc.media_url, filename, mimetype: doc.media_mimetype})} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-white rounded-lg transition-colors" title="Aperçu">
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                            </button>
+                            {(isImage || isPdf) && (
+                              <button onClick={() => isImage ? window.open(doc.media_url, '_blank') : setPreviewDoc({url: doc.media_url, filename, mimetype: doc.media_mimetype})} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-white rounded-lg transition-colors" title="Aperçu">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                              </button>
+                            )}
                             <a href={doc.media_url} download={filename} className="p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors" title="Télécharger">
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                             </a>
