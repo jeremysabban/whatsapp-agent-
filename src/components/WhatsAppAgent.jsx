@@ -1925,7 +1925,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
               <button onClick={scrollToBottom} className="sticky bottom-2 left-[calc(100%-3rem)] w-10 h-10 bg-white/90 hover:bg-white shadow-lg rounded-full flex items-center justify-center text-gray-600 hover:text-emerald-600 transition-all border border-gray-200" title="Aller en bas">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" /></svg>
               </button>
-            </div>
+            </div>}
             {/* Brain Result Toast */}
             {brainResult && (
               <div className={`p-3 rounded-xl text-sm ${brainResult.error ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
