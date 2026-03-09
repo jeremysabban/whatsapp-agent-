@@ -93,14 +93,13 @@ async function refreshDossiers() {
   }
 }
 
-// Refresh tasks cache
+// Refresh tasks cache (all tasks, not just open ones)
 async function refreshTasks() {
   console.log('[CACHE] Refreshing tasks...');
   try {
-    const results = await fetchAllPages(NOTION_TASKS_DB_ID, {
-      property: 'Statut',
-      checkbox: { equals: false }
-    });
+    const results = await fetchAllPages(NOTION_TASKS_DB_ID, {}, [
+      { timestamp: 'created_time', direction: 'descending' }
+    ]);
     const tasks = results.map(page => ({
       id: page.id,
       name: page.properties['Tâche']?.title?.[0]?.plain_text || '',
@@ -121,13 +120,13 @@ async function refreshTasks() {
 }
 
 // Refresh projects cache
+// Refresh projects cache (all projects)
 async function refreshProjects() {
   console.log('[CACHE] Refreshing projects...');
   try {
-    const results = await fetchAllPages(NOTION_PROJECTS_DB_ID, {
-      property: 'Terminé',
-      checkbox: { equals: false }
-    });
+    const results = await fetchAllPages(NOTION_PROJECTS_DB_ID, {}, [
+      { timestamp: 'last_edited_time', direction: 'descending' }
+    ]);
     const projects = results.map(page => ({
       id: page.id,
       name: page.properties['Name']?.title?.[0]?.plain_text || '',

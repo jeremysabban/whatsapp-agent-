@@ -1,110 +1,65 @@
 import { NextResponse } from 'next/server';
-import { NOTION_TASKS_DB_ID, notionHeaders } from '@/lib/notion-config';
+import { getCache, startScheduler } from '@/lib/notion-cache';
 
-function extractPhone(prop) {
-  if (!prop?.rollup?.array?.[0]) return null;
-  const item = prop.rollup.array[0];
-  return item.phone_number || item.rich_text?.[0]?.plain_text || item.title?.[0]?.plain_text || item.number?.toString() || null;
-}
-
-// Batch retrieve pages in parallel chunks of 10
-async function batchRetrieve(ids) {
-  const results = [];
-  for (let i = 0; i < ids.length; i += 10) {
-    const batch = ids.slice(i, i + 10);
-    const batchResults = await Promise.all(
-      batch.map(id =>
-        fetch(`https://api.notion.com/v1/pages/${id}`, { headers: notionHeaders() })
-          .then(r => r.ok ? r.json() : null)
-          .catch(() => null)
-      )
-    );
-    results.push(...batchResults);
+// Ensure scheduler is started
+let initialized = false;
+function ensureInit() {
+  if (!initialized) {
+    startScheduler();
+    initialized = true;
   }
-  return results.filter(Boolean);
 }
 
 export async function GET(request) {
   const start = Date.now();
 
   try {
+    ensureInit();
     const { searchParams } = new URL(request.url);
     const showCompleted = searchParams.get('completed') === 'true';
 
-    // 1. ONE query for all tasks
-    const tasksRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_TASKS_DB_ID}/query`, {
-      method: 'POST',
-      headers: notionHeaders(),
-      body: JSON.stringify({
-        filter: { property: 'Statut', checkbox: { equals: showCompleted } },
-        sorts: [{ timestamp: 'created_time', direction: 'descending' }],
-        page_size: 100
-      })
-    });
+    // Get cached data
+    const cachedTasks = getCache('tasks');
+    const cachedProjects = getCache('projects');
+    const cachedDossiers = getCache('dossiers');
 
-    if (!tasksRes.ok) {
-      const err = await tasksRes.json();
-      return NextResponse.json({ error: err.message }, { status: 500 });
+    if (!cachedTasks?.data) {
+      return NextResponse.json({ error: 'Cache not ready, please refresh' }, { status: 503 });
     }
 
-    const tasksData = await tasksRes.json();
-    const tasksFetchTime = Date.now() - start;
+    console.log('[TASKS] Using cached data');
 
-    // 2. Collect UNIQUE project and dossier IDs
-    const projectIds = [...new Set(
-      tasksData.results.flatMap(t => t.properties['Projet']?.relation?.map(r => r.id) || [])
-    )];
-    const dossierIds = [...new Set(
-      tasksData.results.flatMap(t => t.properties['💬 Dossiers']?.relation?.map(r => r.id) || [])
-    )];
+    // Filter tasks by completion status
+    let tasks = cachedTasks.data.filter(t => t.completed === showCompleted);
 
-    // 3. Fetch projects and dossiers IN PARALLEL with batching
-    const relationsStart = Date.now();
-    const [projects, dossiers] = await Promise.all([
-      batchRetrieve(projectIds),
-      batchRetrieve(dossierIds)
-    ]);
-    const relationsFetchTime = Date.now() - relationsStart;
-
-    // 4. Build lookup maps
+    // Build lookup maps from cache
     const projectMap = {};
-    projects.forEach(p => {
+    (cachedProjects?.data || []).forEach(p => {
       projectMap[p.id] = {
-        name: p.properties['Nom']?.title?.[0]?.plain_text || p.properties['Name']?.title?.[0]?.plain_text || 'Sans nom',
-        type: p.properties['Type']?.select?.name || null
+        name: p.name,
+        type: p.type
       };
     });
 
     const dossierMap = {};
-    dossiers.forEach(d => {
+    (cachedDossiers?.data || []).forEach(d => {
       dossierMap[d.id] = {
         id: d.id,
-        name: d.properties['Nom du dossier']?.title?.[0]?.plain_text || 'Sans nom',
-        geminiUrl: d.properties['Gemini GPT']?.url || null,
-        phone: extractPhone(d.properties['telephone']),
+        name: d.name,
+        geminiUrl: d.geminiUrl,
+        phone: d.phone,
         notionUrl: `https://notion.so/${d.id.replace(/-/g, '')}`
       };
     });
 
-    // 5. Assemble final result
-    const tasks = tasksData.results.map(t => {
-      const projectId = t.properties['Projet']?.relation?.[0]?.id;
-      const dossierId = t.properties['💬 Dossiers']?.relation?.[0]?.id;
+    // Enrich tasks with project and dossier info
+    tasks = tasks.map(t => ({
+      ...t,
+      project: t.projectId ? projectMap[t.projectId] : null,
+      dossier: t.dossierId ? dossierMap[t.dossierId] : null
+    }));
 
-      return {
-        id: t.id,
-        name: t.properties['Tâche']?.title?.[0]?.plain_text || t.properties['Nom']?.title?.[0]?.plain_text || 'Sans titre',
-        completed: t.properties['Statut']?.checkbox || false,
-        priority: t.properties['Priorité']?.select?.name || '',
-        date: t.properties['Date']?.date?.start || null,
-        createdAt: t.created_time,
-        url: t.url,
-        project: projectId ? projectMap[projectId] : null,
-        dossier: dossierId ? dossierMap[dossierId] : null
-      };
-    });
-
-    // 6. Group by dossier
+    // Group by dossier
     const groupedByDossier = {};
     const tasksWithoutDossier = [];
 
@@ -124,13 +79,15 @@ export async function GET(request) {
     });
 
     const totalTime = Date.now() - start;
-    console.log(`[TASKS API] ${totalTime}ms total (tasks: ${tasksFetchTime}ms, relations: ${relationsFetchTime}ms) — ${tasksData.results.length} tâches, ${projectIds.length} projets, ${dossierIds.length} dossiers`);
+    console.log(`[TASKS API] ${totalTime}ms (from cache) — ${tasks.length} tâches`);
 
     return NextResponse.json({
       tasks,
       groupedByDossier: Object.values(groupedByDossier),
       tasksWithoutDossier,
-      total: tasks.length
+      total: tasks.length,
+      fromCache: true,
+      lastUpdate: cachedTasks.lastUpdate
     });
 
   } catch (error) {
