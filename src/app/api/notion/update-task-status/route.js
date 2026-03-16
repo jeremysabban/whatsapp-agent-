@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { refreshTasks } from '@/lib/notion-cache';
 
 const NOTION_API_KEY = process.env.NOTION_API_KEY;
 
@@ -32,6 +33,9 @@ export async function POST(request) {
 
     const taskPage = await updateRes.json();
     const taskName = taskPage.properties['Tâche']?.title?.[0]?.text?.content || 'Tâche';
+
+    // Refresh tasks cache
+    refreshTasks().catch(err => console.error('Cache refresh error:', err));
 
     return NextResponse.json({
       success: true,

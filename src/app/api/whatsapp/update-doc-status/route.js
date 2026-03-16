@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { updateDocumentStatus } from '@/lib/database';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(request) {
   try {
     const { docId, status } = await request.json();

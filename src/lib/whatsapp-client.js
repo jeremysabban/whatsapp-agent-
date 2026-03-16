@@ -3,13 +3,69 @@ import pino from 'pino';
 import path from 'path';
 import fs from 'fs';
 import cron from 'node-cron';
-import { upsertConversation, insertMessage, updateConversationLastMessage, incrementUnread, insertDocument, updateMessageMedia, forceUpdateName, upsertLabel, addLabelAssociation, removeLabelAssociation, deleteLabel, insertAgentLog, getConversations, getDb } from './database.js';
-import { processSmartInput } from './gemini-brain.js';
+import { upsertConversation, insertMessage, updateConversationLastMessage, incrementUnread, insertDocument, updateMessageMedia, forceUpdateName, upsertLabel, addLabelAssociation, removeLabelAssociation, deleteLabel, insertAgentLog, getConversations, getConversation, getDb } from './database.js';
+import { processSmartInput } from './claude-brain.js';
+import { NOTION_TASKS_DB_ID, notionHeaders } from './notion-config.js';
 import { scheduleReminder, addNoteToDossier, createTask, createProject, createTaskOnProject, getTasksReport, findProjectAndCreateTask, getCategoryReport, getDailyReport, completeTaskById } from './gemini-tools.js';
+import { generateRecap, setWhatsAppSender } from './recap-engine.js';
 
 const AUTH_DIR = path.join(process.cwd(), 'data', 'auth');
 const MEDIA_DIR = path.join(process.cwd(), 'data', 'media');
 const DOCS_DIR = path.join(process.cwd(), 'data', 'documents');
+
+// Helper to detect 👉 and create tasks
+async function processTasksFromMessage(text, jid) {
+  if (!text || !text.includes('👉')) return;
+
+  // Get conversation to find dossier
+  const conv = getConversation(jid);
+  const dossierId = conv?.notion_dossier_id || null;
+
+  // Extract all lines starting with 👉
+  const lines = text.split('\n');
+  const taskLines = lines.filter(line => line.trim().startsWith('👉'));
+
+  if (taskLines.length === 0) return;
+
+  console.log(`[TASKS] 📝 Détecté ${taskLines.length} tâche(s) dans le message`);
+
+  for (const line of taskLines) {
+    // Remove 👉 and trim
+    const taskName = line.replace('👉', '').trim();
+    if (!taskName) continue;
+
+    try {
+      const properties = {
+        'Tâche': { title: [{ text: { content: taskName } }] },
+        'Statut': { checkbox: false }
+      };
+
+      // Link to dossier if available
+      if (dossierId) {
+        properties['💬 Dossiers'] = { relation: [{ id: dossierId }] };
+      }
+
+      const res = await fetch('https://api.notion.com/v1/pages', {
+        method: 'POST',
+        headers: notionHeaders(),
+        body: JSON.stringify({
+          parent: { database_id: NOTION_TASKS_DB_ID },
+          properties
+        })
+      });
+
+      if (res.ok) {
+        console.log(`[TASKS] ✅ Tâche créée: "${taskName}"`);
+        insertAgentLog('task_created', `Tâche créée via 👉: ${taskName}`, jid, conv?.display_name || conv?.whatsapp_name || null, JSON.stringify({ source: 'whatsapp_emoji' }));
+      } else {
+        const err = await res.json();
+        console.error(`[TASKS] ❌ Erreur création: ${err.message}`);
+      }
+    } catch (e) {
+      console.error(`[TASKS] ❌ Exception:`, e.message);
+    }
+  }
+}
 const NOTIFICATIONS_PATH = path.join(process.cwd(), 'data', 'wa-notifications.json');
 if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
 if (!fs.existsSync(MEDIA_DIR)) fs.mkdirSync(MEDIA_DIR, { recursive: true });
@@ -1381,6 +1437,12 @@ function registerEventHandlers(sock) {
         if (!fromMe && type === 'notify') incrementUnread(actualJid);
         broadcast({ type: 'message', data: { jid: actualJid, text, fromMe, name: senderName, timestamp: ts, msgType }, timestamp: Date.now() });
         if (type === 'notify') console.log(`[WA] ${fromMe ? '→' : '←'} ${senderName}: ${text.substring(0,50)}`);
+
+        // Detect 👉 tasks in MY messages only (any type, not just notify)
+        if (fromMe && text.includes('👉')) {
+          console.log(`[TASKS] 👉 détecté dans message vers ${actualJid}`);
+          processTasksFromMessage(text, actualJid).catch(e => console.error('[TASKS] Error:', e.message));
+        }
       } catch (err) { console.error('[WA] Msg error:', err.message); }
     }
   });
@@ -1493,9 +1555,30 @@ async function initSocket() {
         }
       }, 5000);
 
+      // Configure recap sender
+      setWhatsAppSender(async (jid, text) => {
+        if (wa.connectionStatus !== 'connected' || !wa.sock) {
+          throw new Error('WhatsApp non connecté');
+        }
+        await wa.sock.sendMessage(jid, { text });
+      });
+
       // 📊 CRON: Rapports automatiques à 8h, 12h, 18h
       if (!g.__waCronScheduled) {
         g.__waCronScheduled = true;
+
+        // Recap automatique 4x/jour (8h, 11h, 15h, 18h) du lundi au samedi
+        cron.schedule('0 8,11,15,18 * * 1-6', async () => {
+          if (wa.connectionStatus !== 'connected' || !wa.sock) return;
+          console.log(`⏰ [RECAP] Génération recap automatique...`);
+          try {
+            await generateRecap();
+            console.log(`✅ [RECAP] Recap envoyé !`);
+          } catch (err) {
+            console.error(`❌ [RECAP] Erreur:`, err.message);
+          }
+        }, { timezone: 'Europe/Paris' });
+
         const schedules = ['0 8 * * *', '0 12 * * *', '0 18 * * *'];
         schedules.forEach(schedule => {
           cron.schedule(schedule, async () => {

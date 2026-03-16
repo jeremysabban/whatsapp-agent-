@@ -97,6 +97,26 @@ export function getDb() {
       data TEXT NOT NULL,
       updated_at INTEGER NOT NULL
     )`);
+    // Knowledge base table
+    _db.exec(`CREATE TABLE IF NOT EXISTS knowledge (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL,
+      titre TEXT NOT NULL,
+      contenu TEXT NOT NULL,
+      assureur TEXT,
+      produit TEXT,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)
+    )`);
+    // Dossier conversations table (for Claude context)
+    _db.exec(`CREATE TABLE IF NOT EXISTS dossier_conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      dossier_notion_id TEXT UNIQUE NOT NULL,
+      messages TEXT NOT NULL DEFAULT '[]',
+      context_360 TEXT NOT NULL DEFAULT '{}',
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now')*1000)
+    )`);
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_knowledge_type ON knowledge(type)`);
+    _db.exec(`CREATE INDEX IF NOT EXISTS idx_knowledge_assureur ON knowledge(assureur)`);
     // Migrate old/null statuses to inbox (default) — never touch hsva or existing valid statuses
     _db.exec(`UPDATE conversations SET status = 'inbox' WHERE status NOT IN ('client', 'assurance', 'prospect', 'apporteur', 'hsva', 'inbox') OR status IS NULL`);
     // Move orphan prospects (no linked Notion contact) to inbox
@@ -497,4 +517,79 @@ export function setNotionCache(dossierId, data) {
 
 export function invalidateNotionCache(dossierId) {
   getDb().prepare('DELETE FROM notion_cache WHERE dossier_id = ?').run(dossierId);
+}
+
+// ==================== KNOWLEDGE BASE ====================
+export function insertKnowledge(type, titre, contenu, assureur = null, produit = null) {
+  const db = getDb();
+  const result = db.prepare('INSERT INTO knowledge (type, titre, contenu, assureur, produit, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(type, titre, contenu, assureur, produit, Date.now());
+  return result.lastInsertRowid;
+}
+
+export function searchKnowledge(query, type = null, limit = 10) {
+  const db = getDb();
+  const searchTerm = `%${query}%`;
+  if (type) {
+    return db.prepare(`
+      SELECT * FROM knowledge
+      WHERE type = ? AND (titre LIKE ? OR contenu LIKE ?)
+      ORDER BY created_at DESC LIMIT ?
+    `).all(type, searchTerm, searchTerm, limit);
+  }
+  return db.prepare(`
+    SELECT * FROM knowledge
+    WHERE titre LIKE ? OR contenu LIKE ?
+    ORDER BY created_at DESC LIMIT ?
+  `).all(searchTerm, searchTerm, limit);
+}
+
+export function getAllKnowledge(type = null, limit = 100) {
+  const db = getDb();
+  if (type) {
+    return db.prepare('SELECT * FROM knowledge WHERE type = ? ORDER BY created_at DESC LIMIT ?').all(type, limit);
+  }
+  return db.prepare('SELECT * FROM knowledge ORDER BY created_at DESC LIMIT ?').all(limit);
+}
+
+export function deleteKnowledge(id) {
+  getDb().prepare('DELETE FROM knowledge WHERE id = ?').run(id);
+}
+
+// ==================== DOSSIER CONVERSATIONS (Claude Context) ====================
+export function upsertDossierConversation(dossierId, messages, context360 = {}) {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO dossier_conversations (dossier_notion_id, messages, context_360, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(dossier_notion_id) DO UPDATE SET
+      messages = excluded.messages,
+      context_360 = excluded.context_360,
+      updated_at = excluded.updated_at
+  `).run(dossierId, JSON.stringify(messages), JSON.stringify(context360), Date.now());
+}
+
+export function getDossierConversation(dossierId) {
+  const row = getDb().prepare('SELECT * FROM dossier_conversations WHERE dossier_notion_id = ?').get(dossierId);
+  if (!row) return null;
+  return {
+    id: row.id,
+    dossierId: row.dossier_notion_id,
+    messages: JSON.parse(row.messages || '[]'),
+    context360: JSON.parse(row.context_360 || '{}'),
+    updatedAt: row.updated_at
+  };
+}
+
+export function appendDossierMessage(dossierId, role, content) {
+  const existing = getDossierConversation(dossierId);
+  const messages = existing?.messages || [];
+  messages.push({ role, content, timestamp: Date.now() });
+  // Keep only last 50 messages
+  const trimmed = messages.slice(-50);
+  upsertDossierConversation(dossierId, trimmed, existing?.context360 || {});
+}
+
+export function clearDossierConversation(dossierId) {
+  getDb().prepare('DELETE FROM dossier_conversations WHERE dossier_notion_id = ?').run(dossierId);
 }

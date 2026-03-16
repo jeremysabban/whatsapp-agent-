@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { updateConversationStatus, updateConversationCategory, updateConversationTags, updateConversationPriority, updateConversationNotes, getConversation, setCustomName, setEmail, setPhone, updateStarred, updateTagProjects, setNameSource, linkNotionContact, unlinkNotionContact, setReminder, clearReminder } from '@/lib/database';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(request) {
   try {
     const { jid, status, category, tags, priority, notes, custom_name, email, phone, starred, tag_projects, name_source, notion_contact_id, notion_contact_name, notion_contact_url, reminder_at, reminder_note } = await request.json();

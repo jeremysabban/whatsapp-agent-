@@ -6,6 +6,8 @@ import DossierList from './DossierList';
 import DossierDetail from './DossierDetail';
 import TasksView from './TasksView';
 import ProjectsView from './ProjectsView';
+import DossierChat from './DossierChat';
+import CalendarView from './CalendarView';
 
 // ==================== CONSTANTS ====================
 const STATUSES = {
@@ -66,6 +68,10 @@ function Icon({ name, className = 'w-4 h-4' }) {
     contract: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M16 13H8" /><path d="M16 17H8" /><path d="M10 9H8" /></>,
     drive: <><path d="M12 2L2 7l10 5 10-5-10-5Z" /><path d="m2 17 10 5 10-5" /><path d="m2 12 10 5 10-5" /></>,
     key: <><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 0-7.778 7.778 5.5 5.5 0 0 0 7.777 0L15.5 15.5m2.5-2.5 3-3m-3 3-3-3" /></>,
+    refresh: <><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></>,
+    external: <><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></>,
+    plus: <><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></>,
+    calendar: <><rect width="18" height="18" x="3" y="4" rx="2" ry="2" /><line x1="16" x2="16" y1="2" y2="6" /><line x1="8" x2="8" y1="2" y2="6" /><line x1="3" x2="21" y1="10" y2="10" /></>,
   };
   return (<svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{icons[name]}</svg>);
 }
@@ -123,6 +129,7 @@ export default function WhatsAppAgent() {
   const [tasksHasLoaded, setTasksHasLoaded] = useState(false);
   const [projectsData, setProjectsData] = useState(null);
   const [projectsHasLoaded, setProjectsHasLoaded] = useState(false);
+  const [highlightedProjectId, setHighlightedProjectId] = useState(null);
   const [newMessage, setNewMessage] = useState('');
   const [draggedCard, setDraggedCard] = useState(null);
   const [notionSearch, setNotionSearch] = useState('');
@@ -173,6 +180,7 @@ export default function WhatsAppAgent() {
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const [analyticsHasLoaded, setAnalyticsHasLoaded] = useState(false);
   const [showReminderModal, setShowReminderModal] = useState(false);
+  const [activeDossierChat, setActiveDossierChat] = useState(null); // { id: notionDossierId, nom: dossierName }
   const [brokerCodes, setBrokerCodes] = useState([]);
   const [loadingBrokerCodes, setLoadingBrokerCodes] = useState(false);
   // Contacts state
@@ -695,6 +703,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
   useEffect(() => { if (view === 'journal') loadAgentLogs(); }, [view, logTypeFilter]);
   useEffect(() => { if (view === 'kanban') { if (!projectsHasLoaded && !loadingPipeline) loadPipelineProjects(); if (!tasksHasLoaded && !loadingAllTasks) loadAllTasks(); } }, [view]);
   useEffect(() => { if (view === 'tasks' && !tasksHasLoaded && !loadingAllTasks) loadAllTasks(); }, [view]);
+  useEffect(() => { if (view === 'calendar' && !tasksHasLoaded && !loadingAllTasks) loadAllTasks(); }, [view]);
   useEffect(() => { if (view === 'projects' && !projectsHasLoaded && !loadingPipeline) loadPipelineProjects(); }, [view]);
   useEffect(() => { if (view === 'contacts' && !contactsHasLoaded && !loadingContacts) loadNotionContacts(); }, [view, contactsHasLoaded, loadingContacts, loadNotionContacts]);
   useEffect(() => { if (view === 'stats' && !salesStatsHasLoaded && !loadingSalesStats) loadSalesStats(); }, [view]);
@@ -1016,6 +1025,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       { id: 'contacts', icon: 'user', label: 'Contacts' },
       { id: 'tasks', icon: 'tasks', label: 'Tâches' },
       { id: 'projects', icon: 'project', label: 'Projets' },
+      { id: 'calendar', icon: 'calendar', label: 'Calendrier' },
       { id: 'documents', icon: 'file', label: 'Documents', badge: stats.pending_docs || 0 },
       { id: 'stats', icon: 'trendUp', label: 'Statistiques' },
       { id: 'analytics', icon: 'chart', label: 'Analytics' },
@@ -1063,229 +1073,333 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
 
   // ==================== DASHBOARD ====================
   const Dashboard = () => {
-    const statusCounts = { client: conversations.filter(c => c.status === 'client').length, assurance: conversations.filter(c => c.status === 'assurance').length, prospect: conversations.filter(c => c.status === 'prospect').length, apporteur: conversations.filter(c => c.status === 'apporteur').length, inbox: conversations.filter(c => c.status === 'inbox').length };
-    const [taskTab, setTaskTab] = useState('faire');
-    const [updatingTask, setUpdatingTask] = useState(null);
-    const [taskSort, setTaskSort] = useState('creation_desc'); // Sorting option
+    const statusCounts = { client: conversations.filter(c => c.status === 'client').length, prospect: conversations.filter(c => c.status === 'prospect').length, inbox: conversations.filter(c => c.status === 'inbox').length };
+    const [taskProjects, setTaskProjects] = useState([]);
+    const [orphanTasks, setOrphanTasks] = useState([]);
+    const [allTasksList, setAllTasksList] = useState([]);
+    const [totalTasks, setTotalTasks] = useState(0);
+    const [loadingTasks, setLoadingTasks] = useState(false);
+    const [tasksLoaded, setTasksLoaded] = useState(false);
+    const [responsableFilter, setResponsableFilter] = useState('Perrine');
+    const [togglingTaskId, setTogglingTaskId] = useState(null);
+    const [commentingTaskId, setCommentingTaskId] = useState(null);
+    const [commentText, setCommentText] = useState('');
+    const [sendingComment, setSendingComment] = useState(false);
+    const [dashboardView, setDashboardView] = useState('projet'); // 'projet', 'orphan', 'date'
 
-    // Eisenhower quadrants based on priority status
-    const EISENHOWER_TABS = [
-      { id: 'faire', label: '🔴 Faire', color: 'bg-red-100 text-red-700', border: 'border-red-200', priorities: ['Urg & Imp'] },
-      { id: 'planifier', label: '🟡 Planifier', color: 'bg-yellow-100 text-yellow-700', border: 'border-yellow-200', priorities: ['Important'] },
-      { id: 'deleguer', label: '🟠 Déléguer', color: 'bg-orange-100 text-orange-700', border: 'border-orange-200', priorities: ['Urgent'] },
-      { id: 'eliminer', label: '⚪ Éliminer', color: 'bg-gray-100 text-gray-600', border: 'border-gray-200', priorities: ['Secondaire', 'En attente', 'À prioriser'] },
-      { id: 'terminees', label: '✅ Terminées', color: 'bg-emerald-100 text-emerald-700', border: 'border-emerald-200', priorities: [] },
-    ];
+    useEffect(() => { loadTasks(); }, [responsableFilter]);
 
-    const getTasksForTab = (tabId) => {
-      if (tabId === 'terminees') return allTasks.filter(t => t.completed);
-      const tab = EISENHOWER_TABS.find(t => t.id === tabId);
-      if (!tab) return [];
-      return allTasks.filter(t => !t.completed && tab.priorities.includes(t.priority));
+    const loadTasks = async () => {
+      setLoadingTasks(true);
+      try {
+        const url = responsableFilter
+          ? `/api/notion/tasks-by-responsable?responsable=${responsableFilter}`
+          : '/api/notion/tasks-by-responsable';
+        const res = await fetch(url);
+        const data = await res.json();
+        setTaskProjects(data.projects || []);
+        setOrphanTasks(data.orphanTasks || []);
+        setAllTasksList(data.allTasks || []);
+        setTotalTasks(data.totalTasks || 0);
+        setTasksLoaded(true);
+      } catch (e) { console.error(e); }
+      setLoadingTasks(false);
     };
 
-    const filteredTasks = getTasksForTab(taskTab);
-    const currentTab = EISENHOWER_TABS.find(t => t.id === taskTab);
-
-    // Sort tasks based on selected option
-    const sortedTasks = [...filteredTasks].sort((a, b) => {
-      switch (taskSort) {
-        case 'creation_desc': return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
-        case 'creation_asc': return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
-        case 'date_asc': {
-          if (!a.date && !b.date) return 0;
-          if (!a.date) return 1;
-          if (!b.date) return -1;
-          return new Date(a.date) - new Date(b.date);
-        }
-        case 'date_desc': {
-          if (!a.date && !b.date) return 0;
-          if (!a.date) return 1;
-          if (!b.date) return -1;
-          return new Date(b.date) - new Date(a.date);
-        }
-        case 'name_asc': return (a.name || '').localeCompare(b.name || '');
-        case 'name_desc': return (b.name || '').localeCompare(a.name || '');
-        case 'dossier': return (a.dossier?.name || 'zzz').localeCompare(b.dossier?.name || 'zzz');
-        default: return 0;
-      }
-    });
-
-    // Update task in Notion
-    const updateTask = async (task, updates) => {
-      setUpdatingTask(task.id);
+    const toggleTaskComplete = async (task, projectId) => {
+      setTogglingTaskId(task.id);
       try {
-        await fetch('/api/notion/update-task', {
+        await fetch('/api/notion/update-task-status', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ taskId: task.id, updates, dossierId: task.dossierId, taskName: task.name }),
+          body: JSON.stringify({ taskId: task.id, completed: true })
         });
-        loadAllTasks(); // Refresh
-      } catch (e) { console.error('Update task error:', e); }
-      setUpdatingTask(null);
+        if (projectId) {
+          setTaskProjects(prev => prev.map(p =>
+            p.id === projectId ? { ...p, tasks: p.tasks.filter(t => t.id !== task.id) } : p
+          ).filter(p => p.tasks.length > 0));
+        } else {
+          setOrphanTasks(prev => prev.filter(t => t.id !== task.id));
+        }
+        setAllTasksList(prev => prev.filter(t => t.id !== task.id));
+        setTotalTasks(prev => prev - 1);
+      } catch (e) { console.error(e); }
+      setTogglingTaskId(null);
     };
 
-    // Navigate to conversation linked to task's dossier
-    const navigateToTaskConversation = (task) => {
-      if (task.contact?.jid) {
-        const conv = conversations.find(c => c.jid === task.contact.jid);
-        if (conv) { openConversation(conv); return; }
-      }
-      // Fallback: open in Notion
-      if (task.url) window.open(task.url, '_blank');
+    const addComment = async (task, projectId) => {
+      if (!commentText.trim() || !projectId) return;
+      setSendingComment(true);
+      try {
+        await fetch('/api/notion/add-project-comment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId, taskName: task.name, comment: commentText.trim() })
+        });
+        setCommentText('');
+        setCommentingTaskId(null);
+      } catch (e) { console.error(e); }
+      setSendingComment(false);
     };
 
-    return (
-      <div className="space-y-6">
-        <div><h2 className="text-2xl font-bold text-gray-900">Dashboard</h2><p className="text-gray-500 text-sm mt-1">Vue d'ensemble</p></div>
+    const getTypeColors = (type) => {
+      const colors = {
+        'Lead': { bg: 'bg-purple-50', border: 'border-l-purple-500', badge: 'bg-purple-100 text-purple-700' },
+        'Gestion': { bg: 'bg-emerald-50', border: 'border-l-emerald-500', badge: 'bg-emerald-100 text-emerald-700' },
+        'Sinistre': { bg: 'bg-red-50', border: 'border-l-red-500', badge: 'bg-red-100 text-red-700' },
+      };
+      return colors[type] || { bg: 'bg-gray-50', border: 'border-l-gray-400', badge: 'bg-gray-100 text-gray-700' };
+    };
 
-        {/* WhatsApp connection alert */}
-        {!connected && !connecting && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between">
-            <div className="flex items-center gap-3"><Icon name="wifi" className="w-5 h-5 text-amber-500" /><div><p className="font-semibold text-amber-800 text-sm">WhatsApp non connecté</p><p className="text-amber-600 text-xs">Connecte-toi pour recevoir les messages</p></div></div>
-            <button onClick={() => setView('settings')} className="px-4 py-2 bg-emerald-500 text-white rounded-lg text-sm hover:bg-emerald-600">Connecter</button>
-          </div>
-        )}
+    const getPriorityBadge = (priority) => {
+      if (priority?.includes('Urg')) return { text: 'Urg & Imp', color: 'bg-red-100 text-red-700' };
+      if (priority === 'Important') return { text: 'Important', color: 'bg-orange-100 text-orange-700' };
+      if (priority === 'Secondaire') return { text: 'Secondaire', color: 'bg-gray-100 text-gray-500' };
+      return null;
+    };
 
-        {/* Quick stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {[{ label:'Client', val: statusCounts.client, bg:'bg-emerald-50', color:'text-emerald-700', border:'border-emerald-200', click:()=>{setActiveLabel('client');setView('conversations');} },
-            { label:'Assurance', val: statusCounts.assurance, bg:'bg-blue-50', color:'text-blue-700', border:'border-blue-200', click:()=>{setActiveLabel('assurance');setView('conversations');} },
-            { label:'Prospect', val: statusCounts.prospect, bg:'bg-purple-50', color:'text-purple-700', border:'border-purple-200', click:()=>{setActiveLabel('prospect');setView('conversations');} },
-            { label:'Apporteur', val: statusCounts.apporteur, bg:'bg-amber-50', color:'text-amber-700', border:'border-amber-200', click:()=>{setActiveLabel('apporteur');setView('conversations');} },
-            { label:'À classer', val: statusCounts.inbox, bg:'bg-slate-50', color:'text-slate-700', border:'border-slate-200', click:()=>{setActiveLabel('inbox');setView('conversations');} },
-            { label:'Tâches', val: allTasks.filter(t => !t.completed).length, bg:'bg-orange-50', color:'text-orange-700', border:'border-orange-200', click:()=>{} }
-          ].map(s => (<div key={s.label} onClick={s.click} className={`bg-white rounded-xl border ${s.border} p-4 cursor-pointer hover:shadow-sm`}><div className="flex items-center gap-3"><div className={`w-10 h-10 rounded-lg ${s.bg} flex items-center justify-center`}><span className={`font-bold text-sm ${s.color}`}>{s.label[0]}</span></div><div><p className={`text-2xl font-bold ${s.color}`}>{s.val}</p><p className="text-xs text-gray-500">{s.label}</p></div></div></div>))}
-        </div>
+    // Group tasks by date for date view
+    const groupByDate = (tasks) => {
+      const groups = {};
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-        {/* Reminders section */}
-        {upcomingReminders.length > 0 && (
-          <div className="space-y-3">
-            <h3 className="font-semibold text-gray-900 flex items-center gap-2">
-              <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
-              Rappels ({upcomingReminders.length})
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {upcomingReminders.slice(0, 6).map(c => {
-                const isPast = c.reminder_at && c.reminder_at < Date.now();
-                const isToday = c.reminder_at && new Date(c.reminder_at).toDateString() === new Date().toDateString();
-                return (
-                  <button key={c.jid} onClick={() => openConversation(c)} className={`bg-white rounded-xl border p-4 hover:shadow-md transition-shadow text-left ${isPast ? 'border-red-300 bg-red-50' : isToday ? 'border-orange-300 bg-orange-50' : 'border-blue-200'}`}>
-                    <div className="flex items-center gap-3">
-                      <div className={`w-10 h-10 rounded-full ${c.avatar_color} flex items-center justify-center text-white text-sm font-bold`}>{c.display_initials}</div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-900 truncate text-sm">{c.display_name}</p>
-                        <p className={`text-xs ${isPast ? 'text-red-600 font-semibold' : isToday ? 'text-orange-600 font-semibold' : 'text-blue-600'}`}>
-                          {isPast ? '⚠️ ' : isToday ? '📌 ' : '🔔 '}
-                          {new Date(c.reminder_at).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })} à {new Date(c.reminder_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-                        </p>
-                      </div>
-                    </div>
-                    {c.reminder_note && <p className="text-xs text-gray-500 mt-2 truncate">{c.reminder_note}</p>}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
+      tasks.forEach(task => {
+        const created = new Date(task.createdAt);
+        const taskDay = new Date(created.getFullYear(), created.getMonth(), created.getDate());
+        const diff = Math.floor((today - taskDay) / 86400000);
 
-        {/* Section 1: Starred contacts */}
-        {starredConvs.length > 0 && (
-          <div className="space-y-3">
-            <h3 className="font-semibold text-gray-900 flex items-center gap-2"><svg className="w-5 h-5 text-amber-500" fill="currentColor" viewBox="0 0 24 24"><path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg> Favoris ({starredConvs.length})</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {starredConvs.map(c => (
-                <button key={c.jid} onClick={() => openConversation(c)} className="bg-white rounded-xl border border-gray-200 p-4 hover:shadow-md transition-shadow text-left">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-12 h-12 rounded-full ${c.avatar_color} flex items-center justify-center text-white font-bold`}>{getInitialsFor(c)}</div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-gray-900 truncate">{getName(c)}</p>
-                      <p className={`text-xs ${STATUSES[c.status]?.color || 'text-gray-500'}`}>{STATUSES[c.status]?.label || c.status}</p>
-                    </div>
-                    <svg className="w-5 h-5 text-amber-500 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
-                  </div>
-                  <p className="text-xs text-gray-500 mt-2 truncate">{formatLastMessage(c)}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+        let label;
+        if (diff === 0) label = "Aujourd'hui";
+        else if (diff === 1) label = "Hier";
+        else if (diff < 7) label = "Cette semaine";
+        else if (diff < 14) label = "Semaine dernière";
+        else if (diff < 30) label = "Ce mois";
+        else label = "Plus ancien";
 
-        {/* Section 2: Tasks with Eisenhower Tabs */}
-        <div className="bg-white rounded-xl border border-gray-200">
-          <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-            <h3 className="font-semibold text-gray-900 flex items-center gap-2"><Icon name="tasks" className="w-5 h-5 text-blue-500" /> Tâches Notion</h3>
-            <div className="flex items-center gap-3">
-              <select value={taskSort} onChange={e => setTaskSort(e.target.value)} className="text-xs bg-gray-50 border border-gray-200 rounded-lg px-2 py-1.5 cursor-pointer hover:bg-gray-100">
-                <option value="creation_desc">📅 Plus récent</option>
-                <option value="creation_asc">📅 Plus ancien</option>
-                <option value="date_asc">⏰ Échéance proche</option>
-                <option value="date_desc">⏰ Échéance loin</option>
-                <option value="name_asc">🔤 Nom A-Z</option>
-                <option value="name_desc">🔤 Nom Z-A</option>
-                <option value="dossier">📁 Par dossier</option>
-              </select>
-              <button onClick={loadAllTasks} disabled={loadingAllTasks} className="text-blue-600 text-sm hover:underline flex items-center gap-1">
-                {loadingAllTasks && <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500" />}
-                {loadingAllTasks ? 'Chargement...' : '↻ Actualiser'}
+        if (!groups[label]) groups[label] = [];
+        groups[label].push(task);
+      });
+
+      const order = ["Aujourd'hui", "Hier", "Cette semaine", "Semaine dernière", "Ce mois", "Plus ancien"];
+      return order.filter(k => groups[k]).map(k => ({ label: k, tasks: groups[k] }));
+    };
+
+    const TaskRow = ({ task, projectId, showProject = false }) => {
+      const priorityBadge = getPriorityBadge(task.priority);
+      const isCommenting = commentingTaskId === task.id;
+      const typeColors = getTypeColors(task.projectType);
+
+      return (
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 group">
+            <button
+              onClick={() => toggleTaskComplete(task, projectId)}
+              disabled={togglingTaskId === task.id}
+              className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${togglingTaskId === task.id ? 'opacity-50' : 'border-gray-300 hover:border-emerald-500 hover:bg-emerald-50'}`}
+            >
+              {togglingTaskId === task.id && <div className="animate-spin h-3 w-3 border border-gray-400 rounded-full border-t-transparent" />}
+            </button>
+            <a href={task.url} target="_blank" rel="noopener" className="text-sm text-gray-700 hover:text-purple-600 flex-1 min-w-0 truncate">{task.name}</a>
+            {showProject && task.projectName && (
+              <span className={`text-xs px-1.5 py-0.5 rounded ${typeColors.badge} truncate max-w-[120px]`}>{task.projectName}</span>
+            )}
+            {task.dossierName && (
+              <a href={task.dossierUrl} target="_blank" rel="noopener" className="text-xs px-1.5 py-0.5 rounded bg-cyan-100 text-cyan-700 hover:bg-cyan-200 truncate max-w-[100px]" title={task.dossierName}>
+                📁 {task.dossierName}
+              </a>
+            )}
+            {priorityBadge && <span className={`text-xs px-1.5 py-0.5 rounded ${priorityBadge.color}`}>{priorityBadge.text}</span>}
+            {task.date && <span className="text-xs text-gray-400 whitespace-nowrap">{new Date(task.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })}</span>}
+            {projectId && (
+              <button
+                onClick={() => { setCommentingTaskId(isCommenting ? null : task.id); setCommentText(''); }}
+                className={`p-1 rounded transition-colors ${isCommenting ? 'bg-purple-100 text-purple-600' : 'text-gray-400 hover:text-purple-600 hover:bg-purple-50 opacity-0 group-hover:opacity-100'}`}
+                title="Ajouter un commentaire"
+              >
+                <Icon name="message" className="w-4 h-4" />
               </button>
-            </div>
+            )}
           </div>
-          {/* Eisenhower tabs */}
-          <div className="flex gap-2 p-3 border-b border-gray-100 overflow-x-auto">
-            {EISENHOWER_TABS.map(tab => {
-              const count = getTasksForTab(tab.id).length;
-              return (
-                <button key={tab.id} onClick={() => setTaskTab(tab.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap flex items-center gap-1.5 ${taskTab === tab.id ? tab.color + ' ' + tab.border + ' border' : 'bg-gray-50 text-gray-600 hover:bg-gray-100'}`}>
-                  {tab.label} <span className="opacity-70">({count})</span>
-                </button>
-              );
-            })}
-          </div>
-          {loadingAllTasks ? (
-            <div className="p-8 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto" /></div>
-          ) : sortedTasks.length === 0 ? (
-            <div className="p-8 text-center text-gray-400 text-sm">Aucune tâche dans cette catégorie</div>
-          ) : (
-            <div className="divide-y divide-gray-50">
-              {sortedTasks.slice(0, 30).map(t => (
-                <div key={t.id} className={`flex items-center gap-3 px-4 py-3 hover:bg-gray-50 ${updatingTask === t.id ? 'opacity-50' : ''}`}>
-                  {/* Checkbox */}
-                  <button onClick={() => updateTask(t, { completed: !t.completed })} disabled={updatingTask === t.id} className={`w-5 h-5 rounded border-2 flex items-center justify-center flex-shrink-0 ${t.completed ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-gray-300 hover:border-emerald-400'}`}>
-                    {t.completed && <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
-                  </button>
-                  {/* Task name - click to navigate */}
-                  <button onClick={() => navigateToTaskConversation(t)} className={`flex-1 text-left min-w-0 ${t.completed ? 'line-through text-gray-400' : 'text-gray-900'}`}>
-                    <span className="font-medium hover:text-blue-600 truncate block">{t.name}</span>
-                    <span className="text-xs text-gray-500 truncate block">
-                      {t.contact?.name || t.dossier?.name || ''}
-                      {t.project && <span className="text-gray-400"> · {t.project.name}</span>}
-                    </span>
-                  </button>
-                  {/* Priority selector (only for non-completed) */}
-                  {!t.completed && (
-                    <select value={t.priority} onChange={e => updateTask(t, { priority: e.target.value })} disabled={updatingTask === t.id} className="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1 cursor-pointer hover:bg-gray-100">
-                      <option value="Urg & Imp">🔴 Urg & Imp</option>
-                      <option value="Important">🟡 Important</option>
-                      <option value="Urgent">🟠 Urgent</option>
-                      <option value="Secondaire">⚪ Secondaire</option>
-                      <option value="À prioriser">📋 À prioriser</option>
-                    </select>
-                  )}
-                  {/* Due date */}
-                  {t.date ? (
-                    <span className={`text-xs flex-shrink-0 ${t.dateStatus === 'overdue' ? 'text-red-600 font-semibold' : t.dateStatus === 'today' ? 'text-orange-600 font-semibold' : 'text-gray-500'}`}>
-                      {t.dateStatus === 'overdue' && '⚠️ '}{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}
-                    </span>
-                  ) : t.completed && t.completedAt ? (
-                    <span className="text-xs text-gray-400">✓ {new Date(t.completedAt).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>
-                  ) : null}
-                </div>
-              ))}
-              {sortedTasks.length > 30 && <div className="p-3 text-center text-xs text-gray-400">+{sortedTasks.length - 30} autres tâches</div>}
+          {isCommenting && projectId && (
+            <div className="flex gap-2 ml-7">
+              <input
+                type="text"
+                value={commentText}
+                onChange={e => setCommentText(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addComment(task, projectId)}
+                placeholder="Ajouter un commentaire..."
+                className="flex-1 px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                autoFocus
+              />
+              <button
+                onClick={() => addComment(task, projectId)}
+                disabled={!commentText.trim() || sendingComment}
+                className="px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 disabled:opacity-50"
+              >
+                {sendingComment ? '...' : 'OK'}
+              </button>
             </div>
           )}
         </div>
+      );
+    };
+
+    return (
+      <div className="space-y-4">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">Tableau de Bord</h2>
+            <p className="text-gray-500 text-sm">{totalTasks} tâches ouvertes{responsableFilter ? ` pour ${responsableFilter}` : ''}</p>
+          </div>
+          <button onClick={loadTasks} disabled={loadingTasks} className="flex items-center gap-2 px-3 py-2 bg-purple-100 hover:bg-purple-200 rounded-lg text-sm text-purple-700 transition-colors">
+            {loadingTasks ? <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-purple-600" /> : <Icon name="refresh" className="w-4 h-4" />}
+            Actualiser
+          </button>
+        </div>
+
+        {/* WhatsApp alert */}
+        {!connected && !connecting && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center justify-between">
+            <div className="flex items-center gap-2"><Icon name="wifi" className="w-4 h-4 text-amber-500" /><span className="text-amber-800 text-sm">WhatsApp déconnecté</span></div>
+            <button onClick={() => setView('settings')} className="px-3 py-1 bg-emerald-500 text-white rounded text-xs hover:bg-emerald-600">Connecter</button>
+          </div>
+        )}
+
+        {/* Responsable filter */}
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setResponsableFilter(null)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${!responsableFilter ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            Toutes
+          </button>
+          <button onClick={() => setResponsableFilter('Jeremy')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${responsableFilter === 'Jeremy' ? 'bg-blue-500 text-white' : 'bg-blue-50 text-blue-700 hover:bg-blue-100'}`}>
+            Jeremy
+          </button>
+          <button onClick={() => setResponsableFilter('Perrine')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${responsableFilter === 'Perrine' ? 'bg-yellow-500 text-white' : 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100'}`}>
+            Perrine
+          </button>
+        </div>
+
+        {/* View tabs */}
+        <div className="flex border-b border-gray-200">
+          <button
+            onClick={() => setDashboardView('projet')}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${dashboardView === 'projet' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+          >
+            <span className="flex items-center gap-2">
+              <Icon name="folder" className="w-4 h-4" />
+              Par projet
+              <span className="px-1.5 py-0.5 text-xs rounded-full bg-purple-100 text-purple-700">{taskProjects.length}</span>
+            </span>
+          </button>
+          <button
+            onClick={() => setDashboardView('orphan')}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${dashboardView === 'orphan' ? 'border-orange-500 text-orange-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+          >
+            <span className="flex items-center gap-2">
+              <Icon name="alert" className="w-4 h-4" />
+              Sans projet
+              <span className="px-1.5 py-0.5 text-xs rounded-full bg-orange-100 text-orange-700">{orphanTasks.length}</span>
+            </span>
+          </button>
+          <button
+            onClick={() => setDashboardView('date')}
+            className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${dashboardView === 'date' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+          >
+            <span className="flex items-center gap-2">
+              <Icon name="clock" className="w-4 h-4" />
+              Par date
+              <span className="px-1.5 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700">{totalTasks}</span>
+            </span>
+          </button>
+        </div>
+
+        {/* Content based on view */}
+        {loadingTasks && !tasksLoaded ? (
+          <div className="p-12 text-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500 mx-auto" /></div>
+        ) : (
+          <>
+            {/* VIEW: Par projet */}
+            {dashboardView === 'projet' && (
+              <div className="space-y-3">
+                {taskProjects.length === 0 ? (
+                  <div className="p-12 text-center text-gray-400">Aucun projet avec des tâches</div>
+                ) : (
+                  taskProjects.map(project => {
+                    const colors = getTypeColors(project.type);
+                    return (
+                      <div key={project.id} className={`${colors.bg} rounded-xl border-l-4 ${colors.border} overflow-hidden`}>
+                        <div className="px-4 py-3 flex items-center gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <a href={project.url} target="_blank" rel="noopener" className="font-semibold text-gray-900 hover:text-purple-600">{project.name}</a>
+                              {project.type && <span className={`text-xs px-2 py-0.5 rounded-full ${colors.badge}`}>{project.type}</span>}
+                            </div>
+                            <div className="text-xs text-gray-400 mt-0.5">{project.tasks.length} tâche{project.tasks.length !== 1 ? 's' : ''}</div>
+                          </div>
+                          <a href={project.url} target="_blank" rel="noopener" className="p-1.5 hover:bg-white/50 rounded" title="Ouvrir dans Notion">
+                            <Icon name="external" className="w-4 h-4 text-gray-400" />
+                          </a>
+                        </div>
+                        <div className="px-4 pb-3 space-y-2">
+                          {project.tasks.map(task => (
+                            <TaskRow key={task.id} task={task} projectId={project.id} />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+
+            {/* VIEW: Sans projet */}
+            {dashboardView === 'orphan' && (
+              <div className="space-y-3">
+                {orphanTasks.length === 0 ? (
+                  <div className="p-12 text-center text-gray-400">Aucune tâche sans projet</div>
+                ) : (
+                  <div className="bg-orange-50 rounded-xl border-l-4 border-l-orange-400 overflow-hidden">
+                    <div className="px-4 py-3">
+                      <div className="font-semibold text-gray-700">Tâches sans projet</div>
+                      <div className="text-xs text-gray-400">{orphanTasks.length} tâche{orphanTasks.length !== 1 ? 's' : ''} à organiser</div>
+                    </div>
+                    <div className="px-4 pb-3 space-y-2">
+                      {orphanTasks.map(task => (
+                        <TaskRow key={task.id} task={task} projectId={null} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* VIEW: Par date */}
+            {dashboardView === 'date' && (
+              <div className="space-y-3">
+                {allTasksList.length === 0 ? (
+                  <div className="p-12 text-center text-gray-400">Aucune tâche</div>
+                ) : (
+                  groupByDate(allTasksList).map(group => (
+                    <div key={group.label} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                      <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+                        <div className="flex items-center justify-between">
+                          <div className="font-semibold text-gray-700">{group.label}</div>
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">{group.tasks.length}</span>
+                        </div>
+                      </div>
+                      <div className="px-4 py-3 space-y-2">
+                        {group.tasks.map(task => (
+                          <TaskRow key={task.id} task={task} projectId={task.projectId} showProject={true} />
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </>
+        )}
       </div>
     );
   };
@@ -2048,8 +2162,16 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
                 </div>
               ) : (
                 <>
-                  {/* Refresh Button */}
-                  <div className="flex justify-end mb-2">
+                  {/* Action Buttons */}
+                  <div className="flex justify-between items-center mb-2">
+                    <button
+                      onClick={() => setActiveDossierChat({ id: c.notion_dossier_id, nom: c.notion_dossier_name || getName(c) })}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors"
+                      title="Chat Claude - Assistant IA"
+                    >
+                      <span>💬</span>
+                      Chat Claude
+                    </button>
                     <button
                       onClick={() => loadDossierDetails(c.notion_dossier_id, true)}
                       disabled={loadingDetails}
@@ -3426,6 +3548,23 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
         </div>
       )}
     </div>
+
+    {/* Logout Section */}
+    <div className="bg-white rounded-xl border border-red-200 p-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center"><span className="text-lg">🚪</span></div>
+          <div>
+            <h3 className="font-semibold text-gray-900">Déconnexion</h3>
+            <p className="text-sm text-gray-500">Se déconnecter de l'agent Smart Value</p>
+          </div>
+        </div>
+        <button onClick={async () => {
+          await fetch('/api/auth/logout', { method: 'POST' });
+          window.location.href = '/login';
+        }} className="px-4 py-2 bg-red-50 text-red-700 border border-red-300 rounded-lg hover:bg-red-100 transition-colors flex items-center gap-2 text-sm font-medium">🚪 Déconnexion</button>
+      </div>
+    </div>
   </div>);};
 
   // ==================== CODES COURTAGE VIEW ====================
@@ -3685,6 +3824,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       case 'contacts': return <ContactsView />;
       case 'tasks': return <TasksView
         onOpenConversation={handleOpenConversationFromDossier}
+        onOpenProject={(projectId) => { setHighlightedProjectId(projectId); setView('projects'); }}
         tasksData={tasksData}
         tasksLastUpdate={tasksLastUpdate}
         tasksHasLoaded={tasksHasLoaded}
@@ -3694,6 +3834,12 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
         projectsData={projectsData}
         projectsHasLoaded={projectsHasLoaded}
         onProjectsLoaded={(data) => { setProjectsData(data); setProjectsHasLoaded(true); }}
+        highlightedProjectId={highlightedProjectId}
+        onClearHighlight={() => setHighlightedProjectId(null)}
+      />;
+      case 'calendar': return <CalendarView
+        tasksData={tasksData}
+        onTasksLoaded={(data) => { setTasksData(data); setTasksLastUpdate(new Date()); setTasksHasLoaded(true); }}
       />;
       case 'documents': return <DocumentsView />;
       case 'journal': return <JournalView />;
@@ -4033,6 +4179,19 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
               )}
             </div>
           </div>
+        </div>
+      </div>
+    )}
+
+    {/* DossierChat Modal */}
+    {activeDossierChat && (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm">
+        <div className="bg-white rounded-xl w-[90vw] h-[85vh] overflow-hidden shadow-2xl">
+          <DossierChat
+            dossierId={activeDossierChat.id}
+            dossierNom={activeDossierChat.nom}
+            onClose={() => setActiveDossierChat(null)}
+          />
         </div>
       </div>
     )}

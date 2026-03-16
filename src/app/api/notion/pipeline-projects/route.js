@@ -1,98 +1,82 @@
 import { NextResponse } from 'next/server';
-import { NOTION_PROJECTS_DB_ID, NOTION_TASKS_DB_ID, notionHeaders } from '@/lib/notion-config';
+import { getCache, ensureCachePopulated, getDossierById } from '@/lib/notion-cache';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
-    // Fetch active projects (not done)
-    const projRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_PROJECTS_DB_ID}/query`, {
-      method: 'POST',
-      headers: notionHeaders(),
-      body: JSON.stringify({
-        filter: { property: 'Terminé', checkbox: { equals: false } },
-        sorts: [{ property: 'Dates', direction: 'descending' }],
-      }),
-    });
-    if (!projRes.ok) {
-      const err = await projRes.json();
-      throw new Error(err.message || `Notion ${projRes.status}`);
-    }
-    const projData = await projRes.json();
+    // Ensure cache is populated
+    await ensureCachePopulated();
 
-    const projects = projData.results.map(p => {
-      const dossierId = p.properties['💬 Dossiers']?.relation?.[0]?.id || null;
-      const dossierName = null; // resolved below if needed
+    // Get data from cache
+    const cachedProjects = getCache('projects');
+    const cachedTasks = getCache('tasks');
+
+    if (!cachedProjects?.data) {
+      return NextResponse.json({ projects: [], message: 'Cache loading...' });
+    }
+
+    // Filter active projects (not completed)
+    const activeProjects = cachedProjects.data
+      .filter(p => !p.completed)
+      .sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+
+    const projects = activeProjects.map(p => {
+      // Get dossier name from cache
+      let dossierName = null;
+      if (p.dossierId) {
+        const dossier = getDossierById(p.dossierId);
+        if (dossier) {
+          dossierName = dossier.name;
+        }
+      }
+
       return {
         id: p.id,
-        name: p.properties['Name']?.title?.[0]?.plain_text || 'Sans nom',
-        type: p.properties['Type']?.select?.name || '',
-        niveau: p.properties['Niveau du Projet']?.status?.name || p.properties['Niveau du Projet']?.select?.name || '',
-        priority: p.properties['Priorité']?.select?.name || '',
-        createdAt: p.created_time,
+        name: p.name || 'Sans nom',
+        type: p.type || '',
+        niveau: p.level || '',
+        priority: p.priority || '',
+        createdAt: p.createdAt,
         url: p.url,
-        dossierId,
+        dossierId: p.dossierId,
         dossierName,
         tasks: [],
       };
     });
 
-    // Batch-fetch dossier names for projects that have one
-    const dossierIds = [...new Set(projects.map(p => p.dossierId).filter(Boolean))];
-    const dossierNames = {};
-    await Promise.all(dossierIds.map(async (id) => {
-      try {
-        const res = await fetch(`https://api.notion.com/v1/pages/${id}`, { headers: notionHeaders() });
-        if (res.ok) {
-          const page = await res.json();
-          const props = page.properties;
-          for (const key of Object.keys(props)) {
-            if (props[key]?.type === 'title' && props[key]?.title?.[0]?.plain_text) {
-              dossierNames[id] = props[key].title[0].plain_text;
-              break;
-            }
-          }
-        }
-      } catch {}
-    }));
+    // Build project map for task assignment
+    const projectMap = Object.fromEntries(projects.map(p => [p.id, p]));
 
-    for (const p of projects) {
-      if (p.dossierId && dossierNames[p.dossierId]) {
-        p.dossierName = dossierNames[p.dossierId];
-      }
-    }
+    // Get active tasks from cache and assign to projects
+    if (cachedTasks?.data) {
+      const activeTasks = cachedTasks.data
+        .filter(t => !t.completed)
+        .sort((a, b) => {
+          if (!a.date && !b.date) return 0;
+          if (!a.date) return 1;
+          if (!b.date) return -1;
+          return a.date.localeCompare(b.date);
+        });
 
-    // Fetch active tasks (not done)
-    const taskRes = await fetch(`https://api.notion.com/v1/databases/${NOTION_TASKS_DB_ID}/query`, {
-      method: 'POST',
-      headers: notionHeaders(),
-      body: JSON.stringify({
-        filter: {
-          property: 'Statut',
-          status: { does_not_equal: 'Done' },
-        },
-        sorts: [{ property: 'Date', direction: 'ascending' }],
-        page_size: 100,
-      }),
-    });
-
-    if (taskRes.ok) {
-      const taskData = await taskRes.json();
-      const projectMap = Object.fromEntries(projects.map(p => [p.id, p]));
-
-      for (const t of taskData.results) {
-        const projectId = t.properties['Projet']?.relation?.[0]?.id;
-        if (projectId && projectMap[projectId]) {
-          projectMap[projectId].tasks.push({
+      for (const t of activeTasks) {
+        if (t.projectId && projectMap[t.projectId]) {
+          projectMap[t.projectId].tasks.push({
             id: t.id,
-            name: t.properties['Tâche']?.title?.[0]?.plain_text || 'Sans nom',
-            status: t.properties['Statut']?.status?.name || t.properties['Statut']?.select?.name || '',
-            date: t.properties['Date']?.date?.start || null,
+            name: t.name || 'Sans nom',
+            status: t.completed ? 'Done' : '',
+            date: t.date || null,
             url: t.url,
           });
         }
       }
     }
 
-    return NextResponse.json({ projects });
+    return NextResponse.json({
+      projects,
+      fromCache: true,
+      lastUpdate: cachedProjects.lastUpdate
+    });
   } catch (error) {
     console.error('Pipeline projects error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

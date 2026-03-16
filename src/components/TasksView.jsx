@@ -21,14 +21,16 @@ function Icon({ name, className = 'w-4 h-4' }) {
     chevronDown: <path d="m6 9 6 6 6-6" />,
     chevronUp: <path d="m18 15-6-6-6 6" />,
     refresh: <><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M3 21v-5h5" /></>,
+    user: <><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>,
   };
   return (<svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{icons[name]}</svg>);
 }
 
-export default function TasksView({ onOpenConversation, tasksData, tasksLastUpdate, tasksHasLoaded, onTasksLoaded }) {
+export default function TasksView({ onOpenConversation, onOpenProject, tasksData, tasksLastUpdate, tasksHasLoaded, onTasksLoaded }) {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState('all');
+  const [filterAssignee, setFilterAssignee] = useState('all'); // 'all', 'none', 'Jeremy', 'Perrine'
+  const [filterUrgent, setFilterUrgent] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const [sortBy, setSortBy] = useState('creation_desc');
   const [expandedDossiers, setExpandedDossiers] = useState({});
@@ -36,20 +38,29 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
   const [newTaskModal, setNewTaskModal] = useState(null); // { dossierId, dossierName, projects: [] }
   const [newTaskName, setNewTaskName] = useState('');
   const [selectedProjectId, setSelectedProjectId] = useState('');
+  const [selectedAssignee, setSelectedAssignee] = useState(''); // 'Jeremy', 'Perrine', or ''
+  const [selectedDate, setSelectedDate] = useState('');
+  const [selectedTaskType, setSelectedTaskType] = useState(''); // 'Appel', 'Email', 'Autre'
   const [creatingTask, setCreatingTask] = useState(false);
   const [loadingProjects, setLoadingProjects] = useState(false);
+
+  // Task completion modal state
+  const [completionModal, setCompletionModal] = useState(null); // { task, step: 'choice' | 'followup' }
+  const [followUpTasks, setFollowUpTasks] = useState(['']); // Array of task names
+  const [followUpAssignee, setFollowUpAssignee] = useState(''); // Assignee for follow-up tasks
+  const [followUpDate, setFollowUpDate] = useState(''); // Date for follow-up tasks
+  const [followUpTaskType, setFollowUpTaskType] = useState(''); // Task type for follow-up tasks
+  const [creatingFollowUp, setCreatingFollowUp] = useState(false);
 
   // Derive data from props
   const tasks = tasksData?.tasks || [];
   const groupedByDossier = tasksData?.groupedByDossier || [];
   const tasksWithoutDossier = tasksData?.tasksWithoutDossier || [];
 
-  // Auto-load on first mount only if never loaded before
+  // Always load fresh non-completed tasks on mount
   useEffect(() => {
-    if (!tasksHasLoaded && !loading) {
-      loadTasks();
-    }
-  }, [tasksHasLoaded]);
+    loadTasks(false); // Always load non-completed tasks
+  }, []);
 
   // Expand all dossiers when data changes
   useEffect(() => {
@@ -82,6 +93,19 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
 
   const toggleTask = async (task, completed) => {
     if (togglingTaskId) return;
+
+    // If completing a task, show the completion modal instead of directly completing
+    if (completed && !task.completed) {
+      setCompletionModal({ task, step: 'choice' });
+      return;
+    }
+
+    // If uncompleting, proceed directly
+    await executeToggle(task, completed);
+  };
+
+  // Actually execute the toggle (called from modal or directly when uncompleting)
+  const executeToggle = async (task, completed) => {
     setTogglingTaskId(task.id);
 
     // Optimistic update in parent state
@@ -125,6 +149,86 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
     setTogglingTaskId(null);
   };
 
+  // Handle "Fin d'action" - just complete the task
+  const handleFinishAction = async () => {
+    if (!completionModal) return;
+    await executeToggle(completionModal.task, true);
+    setCompletionModal(null);
+  };
+
+  // Handle "Tâche(s) suivante(s)" - show follow-up form
+  const handleShowFollowUp = () => {
+    setFollowUpTasks(['']);
+    setFollowUpAssignee('');
+    setFollowUpDate('');
+    setFollowUpTaskType('');
+    setCompletionModal(prev => ({ ...prev, step: 'followup' }));
+  };
+
+  // Add another follow-up task input
+  const addFollowUpTask = () => {
+    setFollowUpTasks(prev => [...prev, '']);
+  };
+
+  // Remove a follow-up task input
+  const removeFollowUpTask = (index) => {
+    setFollowUpTasks(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Update a follow-up task name
+  const updateFollowUpTask = (index, value) => {
+    setFollowUpTasks(prev => prev.map((t, i) => i === index ? value : t));
+  };
+
+  // Create follow-up tasks and complete the original
+  const handleCreateFollowUp = async () => {
+    if (!completionModal) return;
+    const task = completionModal.task;
+    const validTasks = followUpTasks.filter(t => t.trim());
+
+    if (validTasks.length === 0) {
+      // No follow-up tasks, just complete
+      await handleFinishAction();
+      return;
+    }
+
+    setCreatingFollowUp(true);
+
+    try {
+      // Create all follow-up tasks
+      for (const taskName of validTasks) {
+        await fetch('/api/notion/create-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: taskName.trim(),
+            dossierId: task.dossierId || null,
+            projectId: task.project?.id || null,
+            assignee: followUpAssignee || null,
+            date: followUpDate || null,
+            taskType: followUpTaskType || null
+          })
+        });
+      }
+
+      // Complete the original task
+      await executeToggle(task, true);
+
+      // Refresh tasks to show the new ones
+      await loadTasks(showCompleted);
+
+      setCompletionModal(null);
+      setFollowUpTasks(['']);
+      setFollowUpAssignee('');
+      setFollowUpDate('');
+      setFollowUpTaskType('');
+    } catch (err) {
+      console.error('Erreur création tâches suivantes:', err);
+    }
+
+    setCreatingFollowUp(false);
+  };
+
   const handleWhatsAppClick = (phone) => {
     if (phone && onOpenConversation) {
       const cleanPhone = phone.replace(/\D/g, '');
@@ -154,6 +258,9 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
     setNewTaskModal({ dossierId, dossierName, projects: [] });
     setNewTaskName('');
     setSelectedProjectId('');
+    setSelectedAssignee('');
+    setSelectedDate('');
+    setSelectedTaskType('');
     setLoadingProjects(true);
 
     try {
@@ -180,7 +287,10 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
         body: JSON.stringify({
           name: newTaskName.trim(),
           dossierId: newTaskModal.dossierId,
-          projectId: selectedProjectId || null
+          projectId: selectedProjectId || null,
+          assignee: selectedAssignee || null,
+          date: selectedDate || null,
+          taskType: selectedTaskType || null
         })
       });
 
@@ -190,6 +300,9 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
         setNewTaskModal(null);
         setNewTaskName('');
         setSelectedProjectId('');
+        setSelectedAssignee('');
+        setSelectedDate('');
+        setSelectedTaskType('');
       }
     } catch (err) {
       console.error('Erreur création tâche:', err);
@@ -198,49 +311,36 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
     setCreatingTask(false);
   };
 
-  // Filter logic
-  const filteredGroups = useMemo(() => {
-    return groupedByDossier
-      .map(group => {
-        let filteredTasks = group.tasks;
+  // Filter and sort all tasks (flat list)
+  const filteredTasks = useMemo(() => {
+    let filtered = [...tasks];
 
-        // Filter by search
-        if (search) {
-          const searchLower = search.toLowerCase();
-          filteredTasks = filteredTasks.filter(t =>
-            t.name.toLowerCase().includes(searchLower) ||
-            t.project?.name?.toLowerCase().includes(searchLower) ||
-            group.dossier.name.toLowerCase().includes(searchLower)
-          );
-        }
-
-        // Filter by type
-        if (typeFilter !== 'all') {
-          filteredTasks = filteredTasks.filter(t => t.project?.type === typeFilter);
-        }
-
-        return { ...group, tasks: filteredTasks };
-      })
-      .filter(group => group.tasks.length > 0);
-  }, [groupedByDossier, search, typeFilter]);
-
-  const filteredOrphanTasks = useMemo(() => {
-    let filtered = tasksWithoutDossier;
-
+    // Filter by search
     if (search) {
       const searchLower = search.toLowerCase();
       filtered = filtered.filter(t =>
-        t.name.toLowerCase().includes(searchLower) ||
-        t.project?.name?.toLowerCase().includes(searchLower)
+        t.name?.toLowerCase().includes(searchLower) ||
+        t.project?.name?.toLowerCase().includes(searchLower) ||
+        t.dossier?.name?.toLowerCase().includes(searchLower)
       );
     }
 
-    if (typeFilter !== 'all') {
-      filtered = filtered.filter(t => t.project?.type === typeFilter);
+    // Filter by assignee
+    if (filterAssignee === 'none') {
+      filtered = filtered.filter(t => !t.assignee);
+    } else if (filterAssignee !== 'all') {
+      filtered = filtered.filter(t => t.assignee === filterAssignee);
+    }
+
+    // Filter by urgent (priority contains "Urg" or "Imp")
+    if (filterUrgent) {
+      filtered = filtered.filter(t =>
+        t.priority?.includes('Urg') || t.priority?.includes('Imp')
+      );
     }
 
     return filtered;
-  }, [tasksWithoutDossier, search, typeFilter]);
+  }, [tasks, search, filterAssignee, filterUrgent]);
 
   // Sorting function
   const sortTasks = (tasks) => {
@@ -267,11 +367,10 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
     });
   };
 
-  // Apply sorting to groups
-  const sortedGroups = filteredGroups.map(g => ({ ...g, tasks: sortTasks(g.tasks) }));
-  const sortedOrphanTasks = sortTasks(filteredOrphanTasks);
+  // Apply sorting to filtered tasks
+  const sortedTasks = sortTasks(filteredTasks);
 
-  const totalFiltered = filteredGroups.reduce((acc, g) => acc + g.tasks.length, 0) + filteredOrphanTasks.length;
+  const totalFiltered = filteredTasks.length;
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
@@ -301,7 +400,7 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
               </span>
             )}
             <button
-              onClick={loadTasks}
+              onClick={() => loadTasks(showCompleted)}
               disabled={loading}
               className="flex items-center gap-2 px-3 py-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 text-sm font-medium"
             >
@@ -322,22 +421,63 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
           />
         </div>
 
-        {/* Type filters + Sort */}
+        {/* Filters + Sort */}
         <div className="flex items-center justify-between gap-4">
-          <div className="flex gap-2">
-            {['all', 'Lead', 'Sinistre', 'Gestion'].map((type) => (
-              <button
-                key={type}
-                onClick={() => setTypeFilter(type)}
-                className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                  typeFilter === type
-                    ? 'bg-gray-900 text-white'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
-                {type === 'all' ? 'Tous' : type === 'Lead' ? 'Leads' : type === 'Sinistre' ? 'Sinistres' : 'Gestions'}
-              </button>
-            ))}
+          <div className="flex gap-2 flex-wrap">
+            {/* All tasks */}
+            <button
+              onClick={() => setFilterAssignee('all')}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                filterAssignee === 'all'
+                  ? 'bg-gray-900 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Toutes
+            </button>
+            {/* Assignee filters */}
+            <button
+              onClick={() => setFilterAssignee(filterAssignee === 'none' ? 'all' : 'none')}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                filterAssignee === 'none'
+                  ? 'bg-gray-700 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              <Icon name="user" className="w-3.5 h-3.5 opacity-50" />
+              Sans resp.
+            </button>
+            <button
+              onClick={() => setFilterAssignee(filterAssignee === 'Jeremy' ? 'all' : 'Jeremy')}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                filterAssignee === 'Jeremy'
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              👤 Jeremy
+            </button>
+            <button
+              onClick={() => setFilterAssignee(filterAssignee === 'Perrine' ? 'all' : 'Perrine')}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                filterAssignee === 'Perrine'
+                  ? 'bg-yellow-500 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              👤 Perrine
+            </button>
+            <div className="w-px bg-gray-200 mx-1"></div>
+            <button
+              onClick={() => setFilterUrgent(!filterUrgent)}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${
+                filterUrgent
+                  ? 'bg-red-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              🔥 Urgentes
+            </button>
           </div>
           <select
             value={sortBy}
@@ -366,107 +506,20 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
           </div>
         ) : totalFiltered === 0 ? (
           <div className="text-center text-gray-500 py-8">
-            {search || typeFilter !== 'all' ? 'Aucune tâche trouvée' : 'Aucune tâche'}
+            {search || filterAssignee !== 'all' || filterUrgent ? 'Aucune tâche trouvée' : 'Aucune tâche'}
           </div>
         ) : (
-          <div className="space-y-4">
-            {/* Grouped by dossier */}
-            {sortedGroups.map(group => {
-              const isExpanded = expandedDossiers[group.dossier.id];
-              const dossier = group.dossier;
-
-              return (
-                <div key={dossier.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                  {/* Dossier header */}
-                  <div
-                    onClick={() => toggleDossier(dossier.id)}
-                    className="p-3 flex items-center gap-3 cursor-pointer hover:bg-gray-50 transition-colors"
-                  >
-                    <span className="text-lg">📁</span>
-                    <div className="flex-1 min-w-0">
-                      <span className="font-medium text-gray-900">{dossier.name}</span>
-                      <span className="ml-2 text-sm text-gray-500">({group.tasks.length})</span>
-                    </div>
-
-                    {/* Action buttons */}
-                    <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
-                      <button
-                        onClick={() => openNewTaskModal(dossier.id, dossier.name)}
-                        className="p-2 hover:bg-blue-50 rounded-lg transition-colors"
-                        title="Ajouter une tâche"
-                      >
-                        <Icon name="plus" className="w-4 h-4 text-blue-600" />
-                      </button>
-                      <button
-                        onClick={() => moveDossierToBottom(dossier.id)}
-                        className="p-2 hover:bg-orange-50 rounded-lg transition-colors"
-                        title="Reporter (en bas de la liste)"
-                      >
-                        <Icon name="arrowDown" className="w-4 h-4 text-orange-500" />
-                      </button>
-                      {dossier.phone && (
-                        <button
-                          onClick={() => handleWhatsAppClick(dossier.phone)}
-                          className="p-2 hover:bg-emerald-50 rounded-lg transition-colors"
-                          title="Ouvrir conversation WhatsApp"
-                        >
-                          <Icon name="message" className="w-4 h-4 text-emerald-600" />
-                        </button>
-                      )}
-                      {dossier.geminiUrl && (
-                        <a
-                          href={dossier.geminiUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="p-2 hover:bg-purple-50 rounded-lg transition-colors"
-                          title="Ouvrir Gemini"
-                        >
-                          <Icon name="bot" className="w-4 h-4 text-purple-600" />
-                        </a>
-                      )}
-                    </div>
-
-                    <Icon
-                      name={isExpanded ? 'chevronUp' : 'chevronDown'}
-                      className="w-5 h-5 text-gray-400"
-                    />
-                  </div>
-
-                  {/* Tasks */}
-                  {isExpanded && (
-                    <div className="border-t border-gray-100 divide-y divide-gray-50">
-                      {group.tasks.map(task => (
-                        <TaskRow
-                          key={task.id}
-                          task={task}
-                          onToggle={toggleTask}
-                          togglingTaskId={togglingTaskId}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {/* Tasks without dossier */}
-            {sortedOrphanTasks.length > 0 && (
-              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-                <div className="p-3 bg-gray-50 border-b border-gray-200">
-                  <span className="font-medium text-gray-700">Sans dossier ({sortedOrphanTasks.length})</span>
-                </div>
-                <div className="divide-y divide-gray-50">
-                  {sortedOrphanTasks.map(task => (
-                    <TaskRow
-                      key={task.id}
-                      task={task}
-                      onToggle={toggleTask}
-                      togglingTaskId={togglingTaskId}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
+          <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+            <div className="divide-y divide-gray-100">
+              {sortedTasks.map(task => (
+                <TaskRow
+                  key={task.id}
+                  task={task}
+                  onToggle={toggleTask}
+                  togglingTaskId={togglingTaskId}
+                />
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -489,6 +542,56 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
                 autoFocus
                 className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
               />
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Date d'échéance</label>
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Type de tâche</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTaskType('')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedTaskType === '' ? 'bg-gray-200 text-gray-800' : 'bg-gray-100 text-gray-500 hover:bg-gray-150'
+                    }`}
+                  >
+                    Aucun
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTaskType('Appel')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedTaskType === 'Appel' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                    }`}
+                  >
+                    📞 Appel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTaskType('Email')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedTaskType === 'Email' ? 'bg-amber-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                    }`}
+                  >
+                    📧 Email
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTaskType('Autre')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedTaskType === 'Autre' ? 'bg-gray-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                    }`}
+                  >
+                    ✅ Autre
+                  </button>
+                </div>
+              </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Lier à un projet (optionnel)</label>
                 {loadingProjects ? (
@@ -514,6 +617,38 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
                   </div>
                 )}
               </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Responsable</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAssignee('')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedAssignee === '' ? 'bg-gray-200 text-gray-800' : 'bg-gray-100 text-gray-500 hover:bg-gray-150'
+                    }`}
+                  >
+                    Aucun
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAssignee('Jeremy')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedAssignee === 'Jeremy' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                    }`}
+                  >
+                    👤 Jeremy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAssignee('Perrine')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      selectedAssignee === 'Perrine' ? 'bg-yellow-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                    }`}
+                  >
+                    👤 Perrine
+                  </button>
+                </div>
+              </div>
             </div>
             <div className="p-4 border-t border-gray-100 flex justify-end gap-2">
               <button
@@ -533,12 +668,253 @@ export default function TasksView({ onOpenConversation, tasksData, tasksLastUpda
           </div>
         </div>
       )}
+
+      {/* Task Completion Modal */}
+      {completionModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setCompletionModal(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            {completionModal.step === 'choice' ? (
+              <>
+                <div className="p-4 border-b border-gray-200">
+                  <h3 className="font-bold text-lg text-gray-900 flex items-center gap-2">
+                    <span className="text-emerald-500">✓</span> Tâche terminée !
+                  </h3>
+                  <p className="text-sm text-gray-500 mt-1 line-clamp-2">{completionModal.task.name}</p>
+                </div>
+                <div className="p-4 space-y-3">
+                  <button
+                    onClick={handleFinishAction}
+                    className="w-full px-4 py-4 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl text-left transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">🏁</span>
+                      <div>
+                        <div className="font-semibold text-emerald-800">Fin d'action</div>
+                        <div className="text-sm text-emerald-600">Terminer sans suite</div>
+                      </div>
+                    </div>
+                  </button>
+                  <button
+                    onClick={handleShowFollowUp}
+                    className="w-full px-4 py-4 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl text-left transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl">➕</span>
+                      <div>
+                        <div className="font-semibold text-blue-800">Tâche(s) suivante(s)</div>
+                        <div className="text-sm text-blue-600">Créer des tâches de suivi</div>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+                <div className="p-4 border-t border-gray-100">
+                  <button
+                    onClick={() => setCompletionModal(null)}
+                    className="w-full px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                  >
+                    Annuler
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="p-4 border-b border-gray-200">
+                  <h3 className="font-bold text-lg text-gray-900">Tâches suivantes</h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {completionModal.task.dossier?.name && (
+                      <span className="inline-flex items-center gap-1">
+                        📁 {completionModal.task.dossier.name}
+                      </span>
+                    )}
+                    {completionModal.task.project?.name && (
+                      <span className="inline-flex items-center gap-1 ml-2">
+                        📋 {completionModal.task.project.name}
+                      </span>
+                    )}
+                    {!completionModal.task.dossier?.name && !completionModal.task.project?.name && (
+                      <span className="text-gray-400">Sans dossier ni projet</span>
+                    )}
+                  </p>
+                </div>
+                <div className="p-4 space-y-3 max-h-80 overflow-y-auto">
+                  {followUpTasks.map((taskName, index) => (
+                    <div key={index} className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder={`Tâche ${index + 1}...`}
+                        value={taskName}
+                        onChange={(e) => updateFollowUpTask(index, e.target.value)}
+                        autoFocus={index === followUpTasks.length - 1}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && taskName.trim()) {
+                            addFollowUpTask();
+                          }
+                        }}
+                        className="flex-1 px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                      />
+                      {followUpTasks.length > 1 && (
+                        <button
+                          onClick={() => removeFollowUpTask(index)}
+                          className="px-3 py-3 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    onClick={addFollowUpTask}
+                    className="w-full px-4 py-2 border-2 border-dashed border-gray-200 rounded-lg text-sm text-gray-500 hover:border-blue-300 hover:text-blue-500 transition-colors"
+                  >
+                    + Ajouter une tâche
+                  </button>
+                  <div className="pt-2">
+                    <label className="block text-xs text-gray-500 mb-1">Responsable</label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFollowUpAssignee('')}
+                        className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                          followUpAssignee === '' ? 'bg-gray-200 text-gray-800' : 'bg-gray-100 text-gray-500 hover:bg-gray-150'
+                        }`}
+                      >
+                        Aucun
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFollowUpAssignee('Jeremy')}
+                        className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                          followUpAssignee === 'Jeremy' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                        }`}
+                      >
+                        👤 Jeremy
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFollowUpAssignee('Perrine')}
+                        className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                          followUpAssignee === 'Perrine' ? 'bg-yellow-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                        }`}
+                      >
+                        👤 Perrine
+                      </button>
+                    </div>
+                  </div>
+                  <div className="pt-2">
+                    <label className="block text-xs text-gray-500 mb-1">Date d'échéance</label>
+                    <input
+                      type="date"
+                      value={followUpDate}
+                      onChange={(e) => setFollowUpDate(e.target.value)}
+                      className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                  </div>
+                  <div className="pt-2">
+                    <label className="block text-xs text-gray-500 mb-1">Type de tâche</label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFollowUpTaskType('')}
+                        className={`flex-1 px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
+                          followUpTaskType === '' ? 'bg-gray-200 text-gray-800' : 'bg-gray-100 text-gray-500 hover:bg-gray-150'
+                        }`}
+                      >
+                        Aucun
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFollowUpTaskType('Appel')}
+                        className={`flex-1 px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
+                          followUpTaskType === 'Appel' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                        }`}
+                      >
+                        📞 Appel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFollowUpTaskType('Email')}
+                        className={`flex-1 px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
+                          followUpTaskType === 'Email' ? 'bg-amber-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                        }`}
+                      >
+                        📧 Email
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setFollowUpTaskType('Autre')}
+                        className={`flex-1 px-2 py-2 rounded-lg text-xs font-medium transition-colors ${
+                          followUpTaskType === 'Autre' ? 'bg-gray-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                        }`}
+                      >
+                        ✅ Autre
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="p-4 border-t border-gray-100 flex justify-between gap-2">
+                  <button
+                    onClick={() => setCompletionModal(prev => ({ ...prev, step: 'choice' }))}
+                    className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+                  >
+                    ← Retour
+                  </button>
+                  <button
+                    onClick={handleCreateFollowUp}
+                    disabled={creatingFollowUp}
+                    className="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
+                  >
+                    {creatingFollowUp ? 'Création...' : `Créer ${followUpTasks.filter(t => t.trim()).length || ''} et terminer`}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 function TaskRow({ task, onToggle, togglingTaskId }) {
   const colors = TYPE_COLORS[task.project?.type] || { bg: 'bg-gray-50', badge: 'bg-gray-100 text-gray-600' };
+
+  // Date formatting with overdue detection
+  const getDateInfo = () => {
+    if (!task.date || task.completed) return null;
+    const date = new Date(task.date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const taskDate = new Date(date);
+    taskDate.setHours(0, 0, 0, 0);
+
+    const diffDays = Math.floor((taskDate - today) / (1000 * 60 * 60 * 24));
+
+    if (diffDays < 0) return { text: date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }), style: 'bg-red-100 text-red-700', overdue: true };
+    if (diffDays === 0) return { text: "Aujourd'hui", style: 'bg-orange-100 text-orange-700', overdue: false };
+    if (diffDays === 1) return { text: 'Demain', style: 'bg-yellow-100 text-yellow-700', overdue: false };
+    return { text: date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }), style: 'bg-gray-100 text-gray-600', overdue: false };
+  };
+
+  const dateInfo = getDateInfo();
+
+  // Assignee color
+  const getAssigneeStyle = () => {
+    if (task.assignee === 'Jeremy') return 'bg-blue-100 text-blue-700';
+    if (task.assignee === 'Perrine') return 'bg-yellow-100 text-yellow-700';
+    return 'bg-violet-100 text-violet-700';
+  };
+
+  // Task type badge
+  const getTaskTypeInfo = () => {
+    if (!task.taskType) return null;
+    switch (task.taskType) {
+      case 'Appel': return { emoji: '📞', style: 'bg-blue-100 text-blue-700' };
+      case 'Email': return { emoji: '📧', style: 'bg-amber-100 text-amber-700' };
+      case 'Autre': return { emoji: '✅', style: 'bg-gray-100 text-gray-600' };
+      default: return null;
+    }
+  };
+  const taskTypeInfo = getTaskTypeInfo();
 
   return (
     <div className={`px-4 py-3 flex items-start gap-3 hover:bg-gray-50 ${colors.bg}`}>
@@ -561,21 +937,49 @@ function TaskRow({ task, onToggle, togglingTaskId }) {
         {task.note && (
           <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{task.note}</p>
         )}
-        {task.project && (
-          <div className="mt-1 flex items-center gap-2">
+        <div className="mt-1 flex items-center gap-2 flex-wrap">
+          {/* Task Type badge (Appel/Email/Autre) */}
+          {taskTypeInfo && (
+            <span className={`px-2 py-0.5 rounded text-xs font-medium ${taskTypeInfo.style}`}>
+              {taskTypeInfo.emoji} {task.taskType}
+            </span>
+          )}
+          {/* Project Type badge */}
+          {task.project?.type && (
             <span className={`px-2 py-0.5 rounded text-xs font-medium ${colors.badge}`}>
               {task.project.type}
             </span>
-            <span className="text-xs text-gray-500">{task.project.name}</span>
-          </div>
-        )}
+          )}
+          {/* Dossier */}
+          {task.dossier?.name && (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+              📁 {task.dossier.name}
+            </span>
+          )}
+          {/* Project */}
+          {task.project?.name && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onOpenProject?.(task.project.id); }}
+              className="flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700 hover:bg-purple-200 transition-colors cursor-pointer"
+            >
+              📋 {task.project.name}
+            </button>
+          )}
+          {/* Assignee */}
+          {task.assignee && (
+            <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${getAssigneeStyle()}`}>
+              <Icon name="user" className="w-3 h-3" />
+              {task.assignee}
+            </span>
+          )}
+          {/* Date */}
+          {dateInfo && (
+            <span className={`px-2 py-0.5 rounded text-xs font-medium ${dateInfo.style}`}>
+              📅 {dateInfo.text}
+            </span>
+          )}
+        </div>
       </div>
-
-      {task.date && (
-        <span className="text-xs text-gray-400 flex-shrink-0">
-          {new Date(task.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
-        </span>
-      )}
 
       <a
         href={task.url}

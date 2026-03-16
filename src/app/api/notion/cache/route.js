@@ -72,18 +72,24 @@ function getNextRefreshTime() {
   const now = new Date();
   const paris = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
   const hour = paris.getHours();
+  const minutes = paris.getMinutes();
 
-  let nextHour;
-  if (hour < 8) nextHour = 8;
-  else if (hour < 13) nextHour = 13;
-  else if (hour < 19) nextHour = 19;
-  else nextHour = 8; // Tomorrow
-
-  const next = new Date(paris);
-  next.setHours(nextHour, 0, 0, 0);
-  if (nextHour === 8 && hour >= 19) {
-    next.setDate(next.getDate() + 1);
+  // Between 9h-19h: refresh every 30 minutes
+  if (hour >= 9 && hour < 19) {
+    const next = new Date(paris);
+    if (minutes < 30) {
+      next.setMinutes(30, 0, 0);
+    } else {
+      next.setHours(hour + 1, 0, 0, 0);
+    }
+    return next.toLocaleString('fr-FR', { timeZone: 'Europe/Paris' });
   }
 
+  // Outside business hours: next refresh at 9h
+  const next = new Date(paris);
+  if (hour >= 19) {
+    next.setDate(next.getDate() + 1);
+  }
+  next.setHours(9, 0, 0, 0);
   return next.toLocaleString('fr-FR', { timeZone: 'Europe/Paris' });
 }

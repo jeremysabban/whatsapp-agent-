@@ -76,6 +76,16 @@ async function refreshContacts() {
   }
 }
 
+// Helper to find title property dynamically
+function findTitleProperty(properties) {
+  for (const [key, value] of Object.entries(properties)) {
+    if (value.type === 'title' && value.title?.[0]?.plain_text) {
+      return value.title[0].plain_text;
+    }
+  }
+  return '';
+}
+
 // Refresh dossiers cache
 async function refreshDossiers() {
   console.log('[CACHE] Refreshing dossiers...');
@@ -83,7 +93,7 @@ async function refreshDossiers() {
     const results = await fetchAllPages(NOTION_DOSSIERS_DB_ID);
     const dossiers = results.map(page => ({
       id: page.id,
-      name: page.properties['Nom du dossier']?.title?.[0]?.plain_text || '',
+      name: findTitleProperty(page.properties),
       identifiant: page.properties['Identifiant']?.rich_text?.[0]?.plain_text || '',
       status: page.properties['Service Lead']?.select?.name || '',
       phone: page.properties['telephone']?.rollup?.array?.[0]?.phone_number || '',
@@ -163,6 +173,12 @@ async function refreshTasks() {
         note = taskContents[page.id] || '';
       }
 
+      // Get assignee (select type field)
+      const assignee = page.properties['Responsable']?.select?.name || null;
+
+      // Get task type (select type field: Appel, Email, Autre)
+      const taskType = page.properties['Type de tâche']?.select?.name || null;
+
       return {
         id: page.id,
         name: page.properties['Tâche']?.title?.[0]?.plain_text || '',
@@ -171,6 +187,8 @@ async function refreshTasks() {
         date: page.properties['Date']?.date?.start || null,
         dossierId: page.properties['💬 Dossiers']?.relation?.[0]?.id || null,
         projectId: page.properties['Projet']?.relation?.[0]?.id || null,
+        assignee,
+        taskType,
         note,
         createdAt: page.created_time,
         url: page.url,
@@ -253,15 +271,12 @@ export function getCacheStatus() {
   };
 }
 
-// Check if it's time to refresh (8h, 13h, 19h Paris time)
-function shouldAutoRefresh() {
+// Check if we're within business hours (9h-19h Paris time)
+function isBusinessHours() {
   const now = new Date();
   const parisTime = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Paris' }));
   const hour = parisTime.getHours();
-  const minute = parisTime.getMinutes();
-
-  // Refresh at 8:00, 13:00, 19:00 (within first 2 minutes of the hour)
-  return (hour === 8 || hour === 13 || hour === 19) && minute < 2;
+  return hour >= 9 && hour < 19;
 }
 
 // Start the scheduler (called once on app start)
@@ -269,18 +284,49 @@ export function startScheduler() {
   if (globalCache._schedulerStarted) return;
   globalCache._schedulerStarted = true;
 
-  console.log('[CACHE] Scheduler started - will refresh at 8h, 13h, 19h (Paris time)');
+  console.log('[CACHE] Scheduler started - will refresh every 30 min between 9h-19h (Paris time)');
 
   // Initial refresh on start
   refreshAllCaches();
 
-  // Check every minute for scheduled refresh
+  // Refresh every 30 minutes during business hours (9h-19h)
   setInterval(() => {
-    if (shouldAutoRefresh()) {
-      console.log('[CACHE] Scheduled refresh triggered');
+    if (isBusinessHours()) {
+      console.log('[CACHE] Scheduled refresh triggered (30 min interval)');
       refreshAllCaches();
     }
-  }, 60000); // Check every minute
+  }, 30 * 60 * 1000); // Every 30 minutes
+}
+
+// Lookup functions for quick access by ID
+export function getDossierById(id) {
+  if (!cache.dossiers.data) return null;
+  return cache.dossiers.data.find(d => d.id === id) || null;
+}
+
+export function getProjectById(id) {
+  if (!cache.projects.data) return null;
+  return cache.projects.data.find(p => p.id === id) || null;
+}
+
+export function getTaskById(id) {
+  if (!cache.tasks.data) return null;
+  return cache.tasks.data.find(t => t.id === id) || null;
+}
+
+export function getContactById(id) {
+  if (!cache.contacts.data) return null;
+  return cache.contacts.data.find(c => c.id === id) || null;
+}
+
+// Ensure cache is populated (call this before using cache)
+export async function ensureCachePopulated() {
+  const needsRefresh = !cache.contacts.data || !cache.dossiers.data || !cache.tasks.data || !cache.projects.data;
+  if (needsRefresh) {
+    console.log('[CACHE] Cache empty, triggering refresh...');
+    await refreshAllCaches();
+  }
+  return true;
 }
 
 // Export individual refresh functions for manual refresh

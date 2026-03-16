@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
 import { NOTION_TASKS_DB_ID, notionHeaders } from '@/lib/notion-config';
+import { refreshTasks, refreshProjects } from '@/lib/notion-cache';
 
 export async function POST(request) {
   try {
-    const { name, dossierId, projectId } = await request.json();
+    const { name, dossierId, projectId, assignee, priority, date, taskType } = await request.json();
 
     if (!name) {
       return NextResponse.json({ error: 'Task name required' }, { status: 400 });
@@ -33,6 +34,34 @@ export async function POST(request) {
       };
     }
 
+    // Set assignee if provided (select type)
+    if (assignee) {
+      properties['Responsable'] = {
+        select: { name: assignee }
+      };
+    }
+
+    // Set priority if provided (status type)
+    if (priority) {
+      properties['Priorité'] = {
+        status: { name: priority }
+      };
+    }
+
+    // Set date if provided
+    if (date) {
+      properties['Date'] = {
+        date: { start: date }
+      };
+    }
+
+    // Set task type if provided (select type: Appel, Email, Autre)
+    if (taskType) {
+      properties['Type de tâche'] = {
+        select: { name: taskType }
+      };
+    }
+
     const res = await fetch('https://api.notion.com/v1/pages', {
       method: 'POST',
       headers: notionHeaders(),
@@ -50,12 +79,17 @@ export async function POST(request) {
 
     const page = await res.json();
 
+    // Refresh tasks and projects cache so new task appears immediately
+    refreshTasks().catch(err => console.error('Cache refresh error:', err));
+    refreshProjects().catch(err => console.error('Projects cache refresh error:', err));
+
     return NextResponse.json({
       success: true,
       task: {
         id: page.id,
         name,
-        url: page.url
+        url: page.url,
+        projectId
       }
     });
 

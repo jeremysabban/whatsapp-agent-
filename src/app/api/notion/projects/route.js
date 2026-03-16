@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getCache, startScheduler } from '@/lib/notion-cache';
+import { getCache, startScheduler, refreshProjects, refreshDossiers, refreshTasks } from '@/lib/notion-cache';
+import { getConversations, getDisplayName } from '@/lib/database';
 
 // Ensure scheduler is started
 let initialized = false;
@@ -18,6 +19,13 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const showCompleted = searchParams.get('completed') === 'true';
     const typeFilter = searchParams.get('type');
+    const forceRefresh = searchParams.get('refresh') === 'true';
+
+    // Force refresh caches if requested
+    if (forceRefresh) {
+      console.log('[PROJECTS] Force refreshing caches...');
+      await Promise.all([refreshProjects(), refreshDossiers(), refreshTasks()]);
+    }
 
     // Get cached data
     const cachedProjects = getCache('projects');
@@ -39,6 +47,22 @@ export async function GET(request) {
         url: `https://notion.so/${d.id.replace(/-/g, '')}`
       };
     });
+
+    // Build dossier to conversations map for contact info (supports multiple contacts)
+    const conversations = getConversations({});
+    const dossierToContacts = {};
+    for (const conv of conversations) {
+      if (conv.notion_dossier_id) {
+        if (!dossierToContacts[conv.notion_dossier_id]) {
+          dossierToContacts[conv.notion_dossier_id] = [];
+        }
+        dossierToContacts[conv.notion_dossier_id].push({
+          jid: conv.jid,
+          name: getDisplayName(conv),
+          phone: conv.phone_number
+        });
+      }
+    }
 
     // Group tasks by project
     const tasksByProject = {};
@@ -84,7 +108,9 @@ export async function GET(request) {
         niveau: p.level,
         completed: p.completed,
         url: p.url,
+        dossierId: p.dossierId,
         dossier: p.dossierId ? dossierMap[p.dossierId] : null,
+        contacts: p.dossierId ? (dossierToContacts[p.dossierId] || []) : [],
         openTasks,
         completedTasks,
         openTasksCount: openTasks.length,

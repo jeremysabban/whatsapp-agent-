@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { resyncMessages } from '@/lib/whatsapp-client';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST(request) {
   try {
     const { jid, count } = await request.json();

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import QRCode from 'qrcode';
 import { getQR, getStatus } from '@/lib/whatsapp-client';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     const qr = getQR();

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { NOTION_PROJECTS_DB_ID, notionHeaders } from '@/lib/notion-config';
 import { insertAgentLog, invalidateNotionCache } from '@/lib/database';
+import { refreshProjects } from '@/lib/notion-cache';
 
 export async function POST(req) {
   try {
@@ -82,6 +83,9 @@ export async function POST(req) {
       conversationName || null,
       { projectName: name, type, priority, niveau, dossierId, dossierName, notionPageId: data.id }
     );
+
+    // Refresh projects cache
+    refreshProjects().catch(err => console.error('Cache refresh error:', err));
 
     return NextResponse.json({
       success: true,

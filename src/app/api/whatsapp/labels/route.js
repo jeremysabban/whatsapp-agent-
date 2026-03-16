@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getAllLabels, getLabelStats } from '@/lib/database';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     const labels = getAllLabels();

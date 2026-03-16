@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { reconnect } from '@/lib/whatsapp-client';
 
+export const dynamic = 'force-dynamic';
+
 export async function POST() {
   try {
     const result = await reconnect();
