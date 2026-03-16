@@ -50,7 +50,7 @@ export async function POST(request) {
 
     // Set date if provided
     if (date) {
-      properties['Date'] = {
+      properties['Date échéance'] = {
         date: { start: date }
       };
     }

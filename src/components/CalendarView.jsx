@@ -28,9 +28,29 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [events, setEvents] = useState([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
+  const [loadingTasks, setLoadingTasks] = useState(false);
   const [calendarConfigured, setCalendarConfigured] = useState(true);
   const [calendarError, setCalendarError] = useState(null);
   const [togglingTaskId, setTogglingTaskId] = useState(null);
+
+  // Load tasks if not already loaded
+  const loadTasks = async () => {
+    if (tasksData?.tasks?.length > 0) return; // Already loaded
+    setLoadingTasks(true);
+    try {
+      const res = await fetch('/api/notion/tasks');
+      const data = await res.json();
+      onTasksLoaded(data);
+    } catch (err) {
+      console.error('Error loading tasks:', err);
+    }
+    setLoadingTasks(false);
+  };
+
+  // Load tasks on mount if not available
+  useEffect(() => {
+    loadTasks();
+  }, []);
 
   // Format date for display
   const formatDate = (date) => {

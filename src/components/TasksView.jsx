@@ -22,6 +22,7 @@ function Icon({ name, className = 'w-4 h-4' }) {
     chevronUp: <path d="m18 15-6-6-6 6" />,
     refresh: <><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M3 21v-5h5" /></>,
     user: <><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>,
+    edit: <><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></>,
   };
   return (<svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{icons[name]}</svg>);
 }
@@ -51,6 +52,14 @@ export default function TasksView({ onOpenConversation, onOpenProject, tasksData
   const [followUpDate, setFollowUpDate] = useState(''); // Date for follow-up tasks
   const [followUpTaskType, setFollowUpTaskType] = useState(''); // Task type for follow-up tasks
   const [creatingFollowUp, setCreatingFollowUp] = useState(false);
+
+  // Edit task modal state
+  const [editTaskModal, setEditTaskModal] = useState(null); // task object
+  const [editName, setEditName] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [editTaskType, setEditTaskType] = useState('');
+  const [editPriority, setEditPriority] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Derive data from props
   const tasks = tasksData?.tasks || [];
@@ -234,6 +243,53 @@ export default function TasksView({ onOpenConversation, onOpenProject, tasksData
       const cleanPhone = phone.replace(/\D/g, '');
       onOpenConversation(cleanPhone);
     }
+  };
+
+  // Open edit task modal
+  const openEditModal = (task) => {
+    setEditTaskModal(task);
+    setEditName(task.name || '');
+    setEditDate(task.date ? task.date.split('T')[0] : '');
+    setEditTaskType(task.taskType || '');
+    setEditPriority(task.priority || '');
+  };
+
+  // Save task edits
+  const saveTaskEdit = async () => {
+    if (!editTaskModal) return;
+    setSavingEdit(true);
+
+    try {
+      const updates = {};
+      if (editName !== editTaskModal.name) updates.name = editName;
+      if (editDate !== (editTaskModal.date?.split('T')[0] || '')) updates.date = editDate || null;
+      if (editTaskType !== (editTaskModal.taskType || '')) updates.taskType = editTaskType || null;
+      if (editPriority !== (editTaskModal.priority || '')) updates.priority = editPriority || null;
+
+      if (Object.keys(updates).length > 0) {
+        const res = await fetch('/api/notion/update-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            taskId: editTaskModal.id,
+            updates,
+            dossierId: editTaskModal.dossierId,
+            taskName: editTaskModal.name
+          })
+        });
+
+        if (res.ok) {
+          // Refresh tasks to get updated data
+          await loadTasks(showCompleted);
+        }
+      }
+
+      setEditTaskModal(null);
+    } catch (err) {
+      console.error('Erreur modification tâche:', err);
+    }
+
+    setSavingEdit(false);
   };
 
   // Move dossier group to bottom of the list
@@ -517,6 +573,7 @@ export default function TasksView({ onOpenConversation, onOpenProject, tasksData
                   task={task}
                   onToggle={toggleTask}
                   togglingTaskId={togglingTaskId}
+                  onEdit={openEditModal}
                 />
               ))}
             </div>
@@ -871,11 +928,140 @@ export default function TasksView({ onOpenConversation, onOpenProject, tasksData
           </div>
         </div>
       )}
+
+      {/* Edit Task Modal */}
+      {editTaskModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditTaskModal(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b border-gray-200">
+              <h3 className="font-bold text-lg text-gray-900">Modifier la tâche</h3>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Nom de la tâche</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  autoFocus
+                  className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Date d'échéance</label>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={(e) => setEditDate(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Type de tâche</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditTaskType('')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      editTaskType === '' ? 'bg-gray-200 text-gray-800' : 'bg-gray-100 text-gray-500 hover:bg-gray-150'
+                    }`}
+                  >
+                    Aucun
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditTaskType('Appel')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      editTaskType === 'Appel' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                    }`}
+                  >
+                    📞 Appel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditTaskType('Email')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      editTaskType === 'Email' ? 'bg-amber-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                    }`}
+                  >
+                    📧 Email
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditTaskType('Autre')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      editTaskType === 'Autre' ? 'bg-gray-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                    }`}
+                  >
+                    ✅ Autre
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Priorité</label>
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setEditPriority('Urgent & Important')}
+                    className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                      editPriority === 'Urgent & Important' ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                    }`}
+                  >
+                    🔴 Urgent & Important
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditPriority('Non Urgent & Important')}
+                    className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                      editPriority === 'Non Urgent & Important' ? 'bg-orange-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                    }`}
+                  >
+                    🟠 Non Urgent & Important
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditPriority('Urgent & Non Important')}
+                    className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                      editPriority === 'Urgent & Non Important' ? 'bg-yellow-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                    }`}
+                  >
+                    🟡 Urgent & Non Important
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditPriority('À prioriser')}
+                    className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                      editPriority === 'À prioriser' ? 'bg-gray-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                    }`}
+                  >
+                    ⚪ À prioriser
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="p-4 border-t border-gray-100 flex justify-end gap-2">
+              <button
+                onClick={() => setEditTaskModal(null)}
+                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={saveTaskEdit}
+                disabled={savingEdit || !editName.trim()}
+                className="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
+              >
+                {savingEdit ? 'Enregistrement...' : 'Enregistrer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function TaskRow({ task, onToggle, togglingTaskId }) {
+function TaskRow({ task, onToggle, togglingTaskId, onEdit }) {
   const colors = TYPE_COLORS[task.project?.type] || { bg: 'bg-gray-50', badge: 'bg-gray-100 text-gray-600' };
 
   // Date formatting with overdue detection
@@ -981,6 +1167,13 @@ function TaskRow({ task, onToggle, togglingTaskId }) {
         </div>
       </div>
 
+      <button
+        onClick={() => onEdit(task)}
+        className="p-1 hover:bg-blue-100 rounded transition-colors flex-shrink-0"
+        title="Modifier"
+      >
+        <Icon name="edit" className="w-4 h-4 text-gray-400 hover:text-blue-500" />
+      </button>
       <a
         href={task.url}
         target="_blank"

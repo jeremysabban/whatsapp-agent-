@@ -184,7 +184,7 @@ async function refreshTasks() {
         name: page.properties['Tâche']?.title?.[0]?.plain_text || '',
         completed: page.properties['Statut']?.checkbox || false,
         priority: page.properties['Priorité']?.status?.name || page.properties['Priorité']?.select?.name || '',
-        date: page.properties['Date']?.date?.start || null,
+        date: page.properties['Date échéance']?.date?.start || page.properties['Date']?.date?.start || null,
         dossierId: page.properties['💬 Dossiers']?.relation?.[0]?.id || null,
         projectId: page.properties['Projet']?.relation?.[0]?.id || null,
         assignee,

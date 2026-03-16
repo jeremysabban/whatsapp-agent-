@@ -22,12 +22,17 @@ export async function POST(req) {
 
     // Handle date
     if (updates.date !== undefined) {
-      properties['Date'] = updates.date ? { date: { start: updates.date } } : { date: null };
+      properties['Date échéance'] = updates.date ? { date: { start: updates.date } } : { date: null };
     }
 
     // Handle name
     if (updates.name) {
       properties['Tâche'] = { title: [{ text: { content: updates.name } }] };
+    }
+
+    // Handle task type (select)
+    if (updates.taskType) {
+      properties['Type de tâche'] = { select: { name: updates.taskType } };
     }
 
     const res = await fetch(`https://api.notion.com/v1/pages/${taskId}`, {
