@@ -130,6 +130,7 @@ export default function WhatsAppAgent() {
   const [projectsData, setProjectsData] = useState(null);
   const [projectsHasLoaded, setProjectsHasLoaded] = useState(false);
   const [highlightedProjectId, setHighlightedProjectId] = useState(null);
+  const [highlightedDossierId, setHighlightedDossierId] = useState(null);
   const [newMessage, setNewMessage] = useState('');
   const [draggedCard, setDraggedCard] = useState(null);
   const [notionSearch, setNotionSearch] = useState('');
@@ -3820,7 +3821,11 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       case 'dashboard': return <Dashboard />;
       case 'kanban': return <Kanban />;
       case 'conversations': return <ConversationsList />;
-      case 'dossiers': return <DossierList onSelectDossier={handleSelectDossier} />;
+      case 'dossiers': return <DossierList
+        onSelectDossier={handleSelectDossier}
+        highlightedDossierId={highlightedDossierId}
+        onClearHighlight={() => setHighlightedDossierId(null)}
+      />;
       case 'contacts': return <ContactsView />;
       case 'tasks': return <TasksView
         onOpenConversation={handleOpenConversationFromDossier}
@@ -3840,6 +3845,16 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       case 'calendar': return <CalendarView
         tasksData={tasksData}
         onTasksLoaded={(data) => { setTasksData(data); setTasksLastUpdate(new Date()); setTasksHasLoaded(true); }}
+        onOpenDossier={(dossierId) => {
+          // Navigate to dossiers view and highlight the dossier
+          setView('dossiers');
+          setHighlightedDossierId(dossierId);
+        }}
+        onOpenProject={(projectId) => {
+          // Navigate to projects view and highlight the project
+          setView('projects');
+          setHighlightedProjectId(projectId);
+        }}
       />;
       case 'documents': return <DocumentsView />;
       case 'journal': return <JournalView />;

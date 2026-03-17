@@ -22,11 +22,24 @@ function Icon({ name, className = 'w-4 h-4' }) {
 // Cache global pour persister entre les changements de vue
 const globalCache = globalThis.__dossierCache || (globalThis.__dossierCache = { dossiers: [], hasLoaded: false });
 
-export default function DossierList({ onSelectDossier }) {
+export default function DossierList({ onSelectDossier, highlightedDossierId, onClearHighlight }) {
   const [dossiers, setDossiers] = useState(globalCache.dossiers);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [searchTimeout, setSearchTimeout] = useState(null);
+
+  // Scroll to highlighted dossier
+  useEffect(() => {
+    if (highlightedDossierId && dossiers.length > 0) {
+      setTimeout(() => {
+        const el = document.getElementById(`dossier-${highlightedDossierId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          setTimeout(() => onClearHighlight?.(), 3000);
+        }
+      }, 300);
+    }
+  }, [highlightedDossierId, dossiers]);
 
   const loadDossiers = async (searchQuery = '', forceRefresh = false) => {
     // Si déjà chargé et pas de recherche/refresh, ne rien faire
@@ -123,8 +136,11 @@ export default function DossierList({ onSelectDossier }) {
             {dossiers.map((dossier) => (
               <div
                 key={dossier.id}
+                id={`dossier-${dossier.id}`}
                 onClick={() => onSelectDossier(dossier)}
-                className="p-4 bg-white hover:bg-gray-50 cursor-pointer transition-colors flex items-center gap-3"
+                className={`p-4 bg-white hover:bg-gray-50 cursor-pointer transition-colors flex items-center gap-3 ${
+                  highlightedDossierId === dossier.id ? 'ring-2 ring-blue-500 bg-blue-50' : ''
+                }`}
               >
                 {/* Avatar */}
                 <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center text-white font-semibold text-sm flex-shrink-0">

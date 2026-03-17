@@ -13,6 +13,7 @@ function Icon({ name, className = 'w-4 h-4' }) {
     refresh: <><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></>,
     user: <><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>,
     alert: <><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" /><path d="M12 9v4" /><path d="M12 17h.01" /></>,
+    edit: <><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></>,
   };
   return (<svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{icons[name]}</svg>);
 }
@@ -24,7 +25,7 @@ const TASK_TYPE_STYLES = {
   Autre: { emoji: '✅', bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200' }
 };
 
-export default function CalendarView({ tasksData, onTasksLoaded }) {
+export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, onOpenProject }) {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [events, setEvents] = useState([]);
   const [loadingEvents, setLoadingEvents] = useState(false);
@@ -33,9 +34,17 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
   const [calendarError, setCalendarError] = useState(null);
   const [togglingTaskId, setTogglingTaskId] = useState(null);
 
+  // Edit task modal state
+  const [editTaskModal, setEditTaskModal] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [editTaskType, setEditTaskType] = useState('');
+  const [editPriority, setEditPriority] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+
   // Load tasks (force refresh from Notion if forceRefresh=true)
   const loadTasks = async (forceRefresh = false) => {
-    if (!forceRefresh && tasksData?.tasks?.length > 0) return; // Already loaded
+    if (!forceRefresh && tasksData?.tasks?.length > 0) return;
     setLoadingTasks(true);
     try {
       const url = forceRefresh ? '/api/notion/tasks?refresh=true' : '/api/notion/tasks';
@@ -98,7 +107,6 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
     setLoadingEvents(true);
     setCalendarError(null);
 
-    // Also refresh tasks if requested
     if (forceRefreshTasks) {
       await loadTasks(true);
     }
@@ -140,7 +148,6 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
     if (togglingTaskId) return;
     setTogglingTaskId(task.id);
 
-    // Optimistic update
     const updateTask = (t) => t.id === task.id ? { ...t, completed } : t;
     const updatedData = {
       ...tasksData,
@@ -161,7 +168,6 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
       });
     } catch (err) {
       console.error('Error toggling task:', err);
-      // Revert on error
       const revertTask = (t) => t.id === task.id ? { ...t, completed: !completed } : t;
       const revertedData = {
         ...tasksData,
@@ -178,6 +184,52 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
     setTogglingTaskId(null);
   };
 
+  // Open edit modal
+  const openEditModal = (task) => {
+    setEditTaskModal(task);
+    setEditName(task.name || '');
+    setEditDate(task.date ? task.date.split('T')[0] : '');
+    setEditTaskType(task.taskType || '');
+    setEditPriority(task.priority || '');
+  };
+
+  // Save task edits
+  const saveTaskEdit = async () => {
+    if (!editTaskModal) return;
+    setSavingEdit(true);
+
+    try {
+      const updates = {};
+      if (editName !== editTaskModal.name) updates.name = editName;
+      if (editDate !== (editTaskModal.date?.split('T')[0] || '')) updates.date = editDate || null;
+      if (editTaskType !== (editTaskModal.taskType || '')) updates.taskType = editTaskType || null;
+      if (editPriority !== (editTaskModal.priority || '')) updates.priority = editPriority || null;
+
+      if (Object.keys(updates).length > 0) {
+        const res = await fetch('/api/notion/update-task', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            taskId: editTaskModal.id,
+            updates,
+            dossierId: editTaskModal.dossierId,
+            taskName: editTaskModal.name
+          })
+        });
+
+        if (res.ok) {
+          await loadTasks(true);
+        }
+      }
+
+      setEditTaskModal(null);
+    } catch (err) {
+      console.error('Erreur modification tâche:', err);
+    }
+
+    setSavingEdit(false);
+  };
+
   // Format event time
   const formatEventTime = (event) => {
     if (event.allDay) return 'Journée';
@@ -185,6 +237,93 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
     const end = new Date(event.end);
     return `${start.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`;
   };
+
+  // Task row component
+  const TaskRow = ({ task, isOverdue = false }) => {
+    const typeStyle = TASK_TYPE_STYLES[task.taskType] || null;
+    const bgClass = isOverdue ? 'hover:bg-red-50/50' : 'hover:bg-gray-50';
+    const textClass = isOverdue ? 'text-red-800' : (task.completed ? 'text-gray-400 line-through' : 'text-gray-900');
+
+    return (
+      <div className={`px-4 py-3 ${bgClass} flex items-start gap-3`}>
+        <button
+          onClick={() => toggleTask(task, !task.completed)}
+          disabled={togglingTaskId === task.id}
+          className={`mt-0.5 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
+            task.completed
+              ? 'bg-emerald-500 border-emerald-500 text-white'
+              : isOverdue ? 'border-red-300 hover:border-emerald-500' : 'border-gray-300 hover:border-emerald-500'
+          } ${togglingTaskId === task.id ? 'opacity-50' : ''}`}
+        >
+          {task.completed && <Icon name="check" className="w-3 h-3" />}
+        </button>
+
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm ${textClass}`}>{task.name}</p>
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            {/* Date for overdue */}
+            {isOverdue && (
+              <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
+                📅 {new Date(task.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+              </span>
+            )}
+            {/* Task type badge */}
+            {typeStyle && (
+              <span className={`px-2 py-0.5 rounded text-xs font-medium ${typeStyle.bg} ${typeStyle.text} border ${typeStyle.border}`}>
+                {typeStyle.emoji} {task.taskType}
+              </span>
+            )}
+            {/* Assignee */}
+            {task.assignee && (
+              <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
+                task.assignee === 'Jeremy' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'
+              }`}>
+                <Icon name="user" className="w-3 h-3" />
+                {task.assignee}
+              </span>
+            )}
+            {/* Dossier - clickable */}
+            {task.dossier?.name && (
+              <button
+                onClick={() => onOpenDossier && onOpenDossier(task.dossier.id)}
+                className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors cursor-pointer"
+              >
+                📁 {task.dossier.name}
+              </button>
+            )}
+            {/* Project - clickable */}
+            {task.project?.name && (
+              <button
+                onClick={() => onOpenProject && onOpenProject(task.projectId)}
+                className="px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700 hover:bg-purple-200 transition-colors cursor-pointer"
+              >
+                📋 {task.project.name}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Edit button */}
+        <button
+          onClick={() => openEditModal(task)}
+          className="p-1 hover:bg-blue-100 rounded transition-colors flex-shrink-0"
+          title="Modifier"
+        >
+          <Icon name="edit" className="w-4 h-4 text-gray-400 hover:text-blue-500" />
+        </button>
+      </div>
+    );
+  };
+
+  // Get overdue tasks
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const overdueTasks = (tasksData?.tasks || []).filter(task => {
+    if (!task.date || task.completed) return false;
+    const taskDate = new Date(task.date);
+    taskDate.setHours(0, 0, 0, 0);
+    return taskDate < today;
+  });
 
   return (
     <div className="h-full flex flex-col bg-gray-50">
@@ -213,10 +352,7 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
 
         {/* Date navigation */}
         <div className="flex items-center justify-center gap-4 mt-4">
-          <button
-            onClick={prevDay}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          >
+          <button onClick={prevDay} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
             <Icon name="chevronLeft" className="w-5 h-5 text-gray-600" />
           </button>
 
@@ -231,20 +367,14 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
             {isToday(selectedDate) ? "Aujourd'hui" : formatDate(selectedDate)}
           </button>
 
-          <button
-            onClick={nextDay}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          >
+          <button onClick={nextDay} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
             <Icon name="chevronRight" className="w-5 h-5 text-gray-600" />
           </button>
         </div>
 
         {!isToday(selectedDate) && (
           <div className="text-center mt-2">
-            <button
-              onClick={goToToday}
-              className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
-            >
+            <button onClick={goToToday} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium">
               Revenir à aujourd'hui
             </button>
           </div>
@@ -267,7 +397,7 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
               <Icon name="alert" className="w-10 h-10 text-amber-400 mx-auto mb-3" />
               <p className="text-gray-600 mb-2">Google Calendar non configuré</p>
               <p className="text-xs text-gray-400">
-                Visitez <code className="bg-gray-100 px-1 rounded">/api/auth/gmail/callback</code> pour autoriser l'accès au calendrier
+                Visitez <code className="bg-gray-100 px-1 rounded">/api/auth/gmail/callback</code> pour autoriser l'accès
               </p>
             </div>
           ) : loadingEvents ? (
@@ -293,23 +423,13 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="font-medium text-gray-900 truncate">{event.title}</p>
-                      {event.location && (
-                        <p className="text-xs text-gray-500 truncate mt-0.5">📍 {event.location}</p>
-                      )}
+                      {event.location && <p className="text-xs text-gray-500 truncate mt-0.5">📍 {event.location}</p>}
                       {event.attendees?.length > 0 && (
-                        <p className="text-xs text-gray-400 mt-0.5">
-                          👥 {event.attendees.length} participant{event.attendees.length > 1 ? 's' : ''}
-                        </p>
+                        <p className="text-xs text-gray-400 mt-0.5">👥 {event.attendees.length} participant{event.attendees.length > 1 ? 's' : ''}</p>
                       )}
                     </div>
                     {event.htmlLink && (
-                      <a
-                        href={event.htmlLink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-1 hover:bg-gray-200 rounded transition-colors"
-                        title="Ouvrir dans Google Calendar"
-                      >
+                      <a href={event.htmlLink} target="_blank" rel="noopener noreferrer" className="p-1 hover:bg-gray-200 rounded transition-colors" title="Ouvrir dans Google Calendar">
                         <Icon name="external" className="w-4 h-4 text-gray-400" />
                       </a>
                     )}
@@ -325,7 +445,7 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
           <div className="px-4 py-3 bg-emerald-50 border-b border-emerald-100">
             <h2 className="font-semibold text-emerald-800 flex items-center gap-2">
               <Icon name="check" className="w-4 h-4" />
-              Tâches du jour
+              Tâches du jour ({tasksForDate.length})
             </h2>
           </div>
 
@@ -335,138 +455,114 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
             </div>
           ) : (
             <div className="divide-y divide-gray-100">
-              {tasksForDate.map(task => {
-                const typeStyle = TASK_TYPE_STYLES[task.taskType] || null;
-                return (
-                  <div key={task.id} className="px-4 py-3 hover:bg-gray-50 flex items-start gap-3">
-                    <button
-                      onClick={() => toggleTask(task, !task.completed)}
-                      disabled={togglingTaskId === task.id}
-                      className={`mt-0.5 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
-                        task.completed
-                          ? 'bg-emerald-500 border-emerald-500 text-white'
-                          : 'border-gray-300 hover:border-emerald-500'
-                      } ${togglingTaskId === task.id ? 'opacity-50' : ''}`}
-                    >
-                      {task.completed && <Icon name="check" className="w-3 h-3" />}
-                    </button>
-
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-sm ${task.completed ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
-                        {task.name}
-                      </p>
-                      <div className="flex items-center gap-2 mt-1 flex-wrap">
-                        {/* Task type badge */}
-                        {typeStyle && (
-                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${typeStyle.bg} ${typeStyle.text} border ${typeStyle.border}`}>
-                            {typeStyle.emoji} {task.taskType}
-                          </span>
-                        )}
-                        {/* Assignee */}
-                        {task.assignee && (
-                          <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
-                            task.assignee === 'Jeremy' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'
-                          }`}>
-                            <Icon name="user" className="w-3 h-3" />
-                            {task.assignee}
-                          </span>
-                        )}
-                        {/* Dossier */}
-                        {task.dossier?.name && (
-                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">
-                            📁 {task.dossier.name}
-                          </span>
-                        )}
-                        {/* Project */}
-                        {task.project?.name && (
-                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
-                            📋 {task.project.name}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <a
-                      href={task.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="p-1 hover:bg-gray-200 rounded transition-colors flex-shrink-0"
-                      title="Ouvrir dans Notion"
-                    >
-                      <Icon name="external" className="w-4 h-4 text-gray-400" />
-                    </a>
-                  </div>
-                );
-              })}
+              {tasksForDate.map(task => <TaskRow key={task.id} task={task} />)}
             </div>
           )}
         </div>
 
         {/* Overdue tasks warning */}
-        {(() => {
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
-          const overdueTasks = (tasksData?.tasks || []).filter(task => {
-            if (!task.date || task.completed) return false;
-            const taskDate = new Date(task.date);
-            taskDate.setHours(0, 0, 0, 0);
-            return taskDate < today;
-          });
+        {overdueTasks.length > 0 && isToday(selectedDate) && (
+          <div className="bg-red-50 rounded-xl border border-red-200 overflow-hidden">
+            <div className="px-4 py-3 bg-red-100 border-b border-red-200">
+              <h2 className="font-semibold text-red-800 flex items-center gap-2">
+                <Icon name="alert" className="w-4 h-4" />
+                Tâches en retard ({overdueTasks.length})
+              </h2>
+            </div>
+            <div className="divide-y divide-red-100">
+              {overdueTasks.map(task => <TaskRow key={task.id} task={task} isOverdue />)}
+            </div>
+          </div>
+        )}
+      </div>
 
-          if (overdueTasks.length === 0 || !isToday(selectedDate)) return null;
-
-          return (
-            <div className="bg-red-50 rounded-xl border border-red-200 overflow-hidden">
-              <div className="px-4 py-3 bg-red-100 border-b border-red-200">
-                <h2 className="font-semibold text-red-800 flex items-center gap-2">
-                  <Icon name="alert" className="w-4 h-4" />
-                  Tâches en retard ({overdueTasks.length})
-                </h2>
+      {/* Edit Task Modal */}
+      {editTaskModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setEditTaskModal(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b border-gray-200">
+              <h3 className="font-bold text-lg text-gray-900">Modifier la tâche</h3>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Nom de la tâche</label>
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  autoFocus
+                  className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                />
               </div>
-              <div className="divide-y divide-red-100">
-                {overdueTasks.slice(0, 5).map(task => {
-                  const typeStyle = TASK_TYPE_STYLES[task.taskType] || null;
-                  return (
-                    <div key={task.id} className="px-4 py-3 hover:bg-red-50/50 flex items-start gap-3">
-                      <button
-                        onClick={() => toggleTask(task, true)}
-                        disabled={togglingTaskId === task.id}
-                        className="mt-0.5 w-5 h-5 rounded border-2 border-red-300 hover:border-emerald-500 flex items-center justify-center transition-colors flex-shrink-0"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-red-800">{task.name}</p>
-                        <div className="flex items-center gap-2 mt-1 flex-wrap">
-                          <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
-                            📅 {new Date(task.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
-                          </span>
-                          {typeStyle && (
-                            <span className={`px-2 py-0.5 rounded text-xs font-medium ${typeStyle.bg} ${typeStyle.text}`}>
-                              {typeStyle.emoji} {task.taskType}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <a
-                        href={task.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="p-1 hover:bg-red-200 rounded transition-colors flex-shrink-0"
-                      >
-                        <Icon name="external" className="w-4 h-4 text-red-400" />
-                      </a>
-                    </div>
-                  );
-                })}
-                {overdueTasks.length > 5 && (
-                  <div className="px-4 py-2 text-xs text-red-600 text-center">
-                    +{overdueTasks.length - 5} autres tâches en retard
-                  </div>
-                )}
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Date d'échéance</label>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={(e) => setEditDate(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Type de tâche</label>
+                <div className="flex gap-2">
+                  {['', 'Appel', 'Email', 'Autre'].map(type => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setEditTaskType(type)}
+                      className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        editTaskType === type
+                          ? type === 'Appel' ? 'bg-blue-500 text-white'
+                            : type === 'Email' ? 'bg-amber-500 text-white'
+                            : type === 'Autre' ? 'bg-gray-600 text-white'
+                            : 'bg-gray-200 text-gray-800'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                      }`}
+                    >
+                      {type === '' ? 'Aucun' : type === 'Appel' ? '📞 Appel' : type === 'Email' ? '📧 Email' : '✅ Autre'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Priorité</label>
+                <div className="flex gap-2 flex-wrap">
+                  {[
+                    { value: 'Urgent & Important', label: '🔴 Urgent & Important', color: 'bg-red-500' },
+                    { value: 'Non Urgent & Important', label: '🟠 Non Urgent & Important', color: 'bg-orange-500' },
+                    { value: 'Urgent & Non Important', label: '🟡 Urgent & Non Important', color: 'bg-yellow-500' },
+                    { value: 'À prioriser', label: '⚪ À prioriser', color: 'bg-gray-500' }
+                  ].map(p => (
+                    <button
+                      key={p.value}
+                      type="button"
+                      onClick={() => setEditPriority(p.value)}
+                      className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                        editPriority === p.value ? `${p.color} text-white` : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-          );
-        })()}
-      </div>
+            <div className="p-4 border-t border-gray-100 flex justify-end gap-2">
+              <button onClick={() => setEditTaskModal(null)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">
+                Annuler
+              </button>
+              <button
+                onClick={saveTaskEdit}
+                disabled={savingEdit || !editName.trim()}
+                className="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
+              >
+                {savingEdit ? 'Enregistrement...' : 'Enregistrer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
