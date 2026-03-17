@@ -34,12 +34,16 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
   const [calendarError, setCalendarError] = useState(null);
   const [togglingTaskId, setTogglingTaskId] = useState(null);
 
+  // Assignee filter state
+  const [assigneeFilter, setAssigneeFilter] = useState('all'); // 'all', 'jeremy', 'perrine', 'common'
+
   // Edit task modal state
   const [editTaskModal, setEditTaskModal] = useState(null);
   const [editName, setEditName] = useState('');
   const [editDate, setEditDate] = useState('');
   const [editTaskType, setEditTaskType] = useState('');
   const [editPriority, setEditPriority] = useState('');
+  const [editAssignee, setEditAssignee] = useState([]); // Array: [], ['Jeremy'], ['Perrine'], ['Jeremy', 'Perrine']
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Load tasks (force refresh from Notion if forceRefresh=true)
@@ -136,9 +140,24 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
     loadEvents();
   }, [selectedDate]);
 
+  // Filter helper for assignee
+  const matchesAssigneeFilter = (task) => {
+    if (assigneeFilter === 'all') return true;
+    const assignee = task.assignee || '';
+    const hasJeremy = assignee.includes('Jeremy');
+    const hasPerrine = assignee.includes('Perrine');
+    const isCommon = hasJeremy && hasPerrine;
+
+    if (assigneeFilter === 'common') return isCommon;
+    if (assigneeFilter === 'jeremy') return hasJeremy; // includes common tasks
+    if (assigneeFilter === 'perrine') return hasPerrine; // includes common tasks
+    return true;
+  };
+
   // Filter tasks for selected date
   const tasksForDate = (tasksData?.tasks || []).filter(task => {
     if (!task.date || task.completed) return false;
+    if (!matchesAssigneeFilter(task)) return false;
     const taskDate = new Date(task.date);
     return taskDate.toDateString() === selectedDate.toDateString();
   });
@@ -191,6 +210,26 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
     setEditDate(task.date ? task.date.split('T')[0] : '');
     setEditTaskType(task.taskType || '');
     setEditPriority(task.priority || '');
+    // Parse assignee - can be 'Jeremy', 'Perrine', 'Jeremy, Perrine', or null
+    const assigneeStr = task.assignee || '';
+    if (assigneeStr.includes('Jeremy') && assigneeStr.includes('Perrine')) {
+      setEditAssignee(['Jeremy', 'Perrine']);
+    } else if (assigneeStr.includes('Jeremy')) {
+      setEditAssignee(['Jeremy']);
+    } else if (assigneeStr.includes('Perrine')) {
+      setEditAssignee(['Perrine']);
+    } else {
+      setEditAssignee([]);
+    }
+  };
+
+  // Toggle assignee in edit modal
+  const toggleEditAssignee = (name) => {
+    setEditAssignee(prev =>
+      prev.includes(name)
+        ? prev.filter(n => n !== name)
+        : [...prev, name]
+    );
   };
 
   // Save task edits
@@ -204,6 +243,13 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
       if (editDate !== (editTaskModal.date?.split('T')[0] || '')) updates.date = editDate || null;
       if (editTaskType !== (editTaskModal.taskType || '')) updates.taskType = editTaskType || null;
       if (editPriority !== (editTaskModal.priority || '')) updates.priority = editPriority || null;
+
+      // Handle assignee - convert array to string format
+      const newAssignee = editAssignee.length === 0 ? null
+        : editAssignee.length === 2 ? 'Jeremy, Perrine'
+        : editAssignee[0];
+      const currentAssignee = editTaskModal.assignee || null;
+      if (newAssignee !== currentAssignee) updates.assignee = newAssignee;
 
       if (Object.keys(updates).length > 0) {
         const res = await fetch('/api/notion/update-task', {
@@ -315,11 +361,12 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
     );
   };
 
-  // Get overdue tasks
+  // Get overdue tasks (also filtered by assignee)
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const overdueTasks = (tasksData?.tasks || []).filter(task => {
     if (!task.date || task.completed) return false;
+    if (!matchesAssigneeFilter(task)) return false;
     const taskDate = new Date(task.date);
     taskDate.setHours(0, 0, 0, 0);
     return taskDate < today;
@@ -379,6 +426,29 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
             </button>
           </div>
         )}
+
+        {/* Assignee filter */}
+        <div className="flex items-center justify-center gap-2 mt-3">
+          <span className="text-xs text-gray-500">Filtrer:</span>
+          {[
+            { id: 'all', label: 'Tous' },
+            { id: 'jeremy', label: '👤 Jeremy' },
+            { id: 'perrine', label: '👤 Perrine' },
+            { id: 'common', label: '👥 Commun' }
+          ].map(f => (
+            <button
+              key={f.id}
+              onClick={() => setAssigneeFilter(f.id)}
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                assigneeFilter === f.id
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Content */}
@@ -546,6 +616,36 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
                     </button>
                   ))}
                 </div>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Responsable (multi-sélection)</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => toggleEditAssignee('Jeremy')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      editAssignee.includes('Jeremy')
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    👤 Jeremy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleEditAssignee('Perrine')}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      editAssignee.includes('Perrine')
+                        ? 'bg-yellow-500 text-white'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    👤 Perrine
+                  </button>
+                </div>
+                {editAssignee.length === 2 && (
+                  <p className="text-xs text-purple-600 mt-1">👥 Tâche commune</p>
+                )}
               </div>
             </div>
             <div className="p-4 border-t border-gray-100 flex justify-end gap-2">

@@ -35,6 +35,15 @@ export async function POST(req) {
       properties['Type de tâche'] = { select: { name: updates.taskType } };
     }
 
+    // Handle assignee (select) - can be 'Jeremy', 'Perrine', 'Jeremy, Perrine', or null
+    if (updates.assignee !== undefined) {
+      if (updates.assignee) {
+        properties['Responsable'] = { select: { name: updates.assignee } };
+      } else {
+        properties['Responsable'] = { select: null };
+      }
+    }
+
     const res = await fetch(`https://api.notion.com/v1/pages/${taskId}`, {
       method: 'PATCH',
       headers: notionHeaders(),
