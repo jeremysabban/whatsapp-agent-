@@ -159,7 +159,7 @@ async function refreshTasks() {
 
     const tasks = results.map(page => {
       // Try property first, then page content
-      const noteProps = ['Note', 'Notes', 'Description', 'Détails', 'Commentaire'];
+      const noteProps = ['Commentaires', 'Commentaire', 'Note', 'Notes', 'Description', 'Détails'];
       let note = '';
       for (const prop of noteProps) {
         const richText = page.properties[prop]?.rich_text;

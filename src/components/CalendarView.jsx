@@ -58,6 +58,7 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
   const [detailNote, setDetailNote] = useState('');
   const [editingNote, setEditingNote] = useState(false);
   const [currentUser, setCurrentUser] = useState('');
+  const [taskJustCompleted, setTaskJustCompleted] = useState(null); // Task that was just completed
 
   // Get current user from cookie
   useEffect(() => {
@@ -456,6 +457,36 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
       setDetailNote(previousNote || '');
     }
     setDetailSaving(false);
+  };
+
+  // Complete task and show next task from project
+  const completeTaskAndShowNext = async () => {
+    if (!detailTask) return;
+
+    const completedTask = { ...detailTask };
+    const projectId = detailTask.projectId;
+
+    // Mark as completed
+    await toggleTask(detailTask, true);
+    setTaskJustCompleted(completedTask);
+
+    // Find next uncompleted task from same project
+    if (projectId) {
+      const nextTask = (tasksData?.tasks || []).find(t =>
+        t.projectId === projectId &&
+        t.id !== detailTask.id &&
+        !t.completed
+      );
+      if (nextTask) {
+        setDetailTask(nextTask);
+        setDetailNote(nextTask.note || '');
+        setEditingNote(false);
+        return;
+      }
+    }
+
+    // No next task - show add task form
+    setShowAddTask(true);
   };
 
   // Format event time
@@ -912,8 +943,23 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
 
       {/* Task Detail Modal (Fiche Tâche) */}
       {detailTask && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => { setDetailTask(null); setDetailAssigneeOpen(false); setShowProjectSelector(false); setShowAddTask(false); setEditingNote(false); }}>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => { setDetailTask(null); setDetailAssigneeOpen(false); setShowProjectSelector(false); setShowAddTask(false); setEditingNote(false); setTaskJustCompleted(null); }}>
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* Success banner when task was just completed */}
+            {taskJustCompleted && (
+              <div className="bg-emerald-100 border-b border-emerald-200 px-4 py-2 flex items-center gap-2">
+                <span className="text-emerald-600">✓</span>
+                <span className="text-sm text-emerald-700">
+                  Tâche "<span className="font-medium">{taskJustCompleted.name}</span>" terminée !
+                </span>
+                <button
+                  onClick={() => setTaskJustCompleted(null)}
+                  className="ml-auto text-emerald-500 hover:text-emerald-700"
+                >
+                  ×
+                </button>
+              </div>
+            )}
             {/* Header - Light blue banner */}
             <div className="p-4 border-b border-sky-200 bg-gradient-to-r from-sky-100 to-sky-50">
               <div className="flex items-start justify-between">
@@ -1224,7 +1270,16 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
                 Modifier
               </button>
               <button
-                onClick={() => { toggleTask(detailTask, !detailTask.completed); setDetailTask(null); }}
+                onClick={() => {
+                  if (detailTask.completed) {
+                    // Reopen task
+                    toggleTask(detailTask, false);
+                    setDetailTask({ ...detailTask, completed: false });
+                  } else {
+                    // Complete and show next task
+                    completeTaskAndShowNext();
+                  }
+                }}
                 className={`px-4 py-2 text-sm rounded-lg flex items-center gap-2 ${
                   detailTask.completed
                     ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'

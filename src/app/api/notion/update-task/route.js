@@ -44,9 +44,9 @@ export async function POST(req) {
       }
     }
 
-    // Handle note/comment (rich_text) - try common property names
+    // Handle note/comment (rich_text) - save to Commentaires property
     if (updates.note !== undefined) {
-      properties['Note'] = { rich_text: updates.note ? [{ text: { content: updates.note } }] : [] };
+      properties['Commentaires'] = { rich_text: updates.note ? [{ text: { content: updates.note } }] : [] };
     }
 
     // Handle project link (relation)
