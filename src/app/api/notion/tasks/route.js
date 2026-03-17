@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getCache, startScheduler } from '@/lib/notion-cache';
+import { getCache, startScheduler, refreshTasks, refreshProjects, refreshDossiers } from '@/lib/notion-cache';
 
 // Ensure scheduler is started
 let initialized = false;
@@ -17,6 +17,13 @@ export async function GET(request) {
     ensureInit();
     const { searchParams } = new URL(request.url);
     const showCompleted = searchParams.get('completed') === 'true';
+    const forceRefresh = searchParams.get('refresh') === 'true';
+
+    // Force refresh caches if requested
+    if (forceRefresh) {
+      console.log('[TASKS] Force refreshing caches...');
+      await Promise.all([refreshTasks(), refreshProjects(), refreshDossiers()]);
+    }
 
     // Get cached data
     const cachedTasks = getCache('tasks');

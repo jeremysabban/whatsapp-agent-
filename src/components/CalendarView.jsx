@@ -33,12 +33,13 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
   const [calendarError, setCalendarError] = useState(null);
   const [togglingTaskId, setTogglingTaskId] = useState(null);
 
-  // Load tasks if not already loaded
-  const loadTasks = async () => {
-    if (tasksData?.tasks?.length > 0) return; // Already loaded
+  // Load tasks (force refresh from Notion if forceRefresh=true)
+  const loadTasks = async (forceRefresh = false) => {
+    if (!forceRefresh && tasksData?.tasks?.length > 0) return; // Already loaded
     setLoadingTasks(true);
     try {
-      const res = await fetch('/api/notion/tasks');
+      const url = forceRefresh ? '/api/notion/tasks?refresh=true' : '/api/notion/tasks';
+      const res = await fetch(url);
       const data = await res.json();
       onTasksLoaded(data);
     } catch (err) {
@@ -93,9 +94,14 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
   };
 
   // Load calendar events for selected date
-  const loadEvents = async () => {
+  const loadEvents = async (forceRefreshTasks = false) => {
     setLoadingEvents(true);
     setCalendarError(null);
+
+    // Also refresh tasks if requested
+    if (forceRefreshTasks) {
+      await loadTasks(true);
+    }
 
     try {
       const res = await fetch(`/api/calendar/events?date=${formatDateForApi(selectedDate)}`);
@@ -197,11 +203,11 @@ export default function CalendarView({ tasksData, onTasksLoaded }) {
             </div>
           </div>
           <button
-            onClick={loadEvents}
-            disabled={loadingEvents}
+            onClick={() => loadEvents(true)}
+            disabled={loadingEvents || loadingTasks}
             className="flex items-center gap-2 px-3 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm text-gray-700 transition-colors disabled:opacity-50"
           >
-            <Icon name="refresh" className={`w-4 h-4 ${loadingEvents ? 'animate-spin' : ''}`} />
+            <Icon name="refresh" className={`w-4 h-4 ${loadingEvents || loadingTasks ? 'animate-spin' : ''}`} />
           </button>
         </div>
 
