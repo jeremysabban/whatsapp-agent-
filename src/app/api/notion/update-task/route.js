@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { notionHeaders } from '@/lib/notion-config';
 import { insertAgentLog, invalidateNotionCache } from '@/lib/database';
+import { refreshTasks } from '@/lib/notion-cache';
 
 export async function POST(req) {
   try {
@@ -35,12 +36,13 @@ export async function POST(req) {
       properties['Type de tâche'] = { select: { name: updates.taskType } };
     }
 
-    // Handle assignee (select) - can be 'Jeremy', 'Perrine', 'Jeremy, Perrine', or null
+    // Handle assignee (multi_select) - can be 'Jeremy', 'Perrine', 'Jeremy, Perrine', or null
     if (updates.assignee !== undefined) {
       if (updates.assignee) {
-        properties['Responsable'] = { select: { name: updates.assignee } };
+        const assignees = updates.assignee.split(', ').map(name => ({ name: name.trim() }));
+        properties['Responsable'] = { multi_select: assignees };
       } else {
-        properties['Responsable'] = { select: null };
+        properties['Responsable'] = { multi_select: [] };
       }
     }
 
@@ -69,6 +71,11 @@ export async function POST(req) {
     if (!res.ok) {
       console.error('[Notion] Update task error:', data);
       return NextResponse.json({ error: data.message || 'Erreur Notion' }, { status: res.status });
+    }
+
+    // Refresh tasks cache if note was updated
+    if (updates.note !== undefined) {
+      refreshTasks().catch(err => console.error('[Notion] Error refreshing tasks cache:', err));
     }
 
     // Invalidate cache for this dossier

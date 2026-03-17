@@ -122,6 +122,7 @@ export default function WhatsAppAgent() {
   const [connecting, setConnecting] = useState(false);
   const [qrImage, setQrImage] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [loggedInUser, setLoggedInUser] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [contactToOpen, setContactToOpen] = useState(null);
   const [tasksData, setTasksData] = useState(null);
@@ -237,6 +238,7 @@ export default function WhatsAppAgent() {
   const messagesContainerRef = useRef(null);
   const messageInputRef = useRef(null);
   const lastMessageCountRef = useRef(0); // Track message count for scroll behavior
+  const isUserAtBottomRef = useRef(true); // Track if user is at bottom of messages
   const selectedJidRef = useRef(selectedJid);
   const searchTimeoutRef = useRef(null);
 
@@ -255,7 +257,31 @@ export default function WhatsAppAgent() {
   }, [activeTimePeriod]);
 
   const loadDocuments = useCallback(async () => { try { const d = await api('documents'); setDocuments(d.documents || []); } catch {} }, []);
-  const loadMessages = useCallback(async (jid) => { try { const d = await api(`messages/${encodeURIComponent(jid)}`); setSelectedMessages(d.messages || []); setSelectedDocs(d.documents || []); setSelectedConv(d.conversation || null); } catch {} }, []);
+  const loadMessages = useCallback(async (jid, forceScrollToBottom = false) => {
+    try {
+      // Save scroll position before updating (only if not forcing scroll to bottom)
+      const container = messagesContainerRef.current;
+      const scrollPos = container ? container.scrollTop : 0;
+      const wasAtBottom = forceScrollToBottom || (container ? (container.scrollHeight - container.scrollTop - container.clientHeight < 100) : true);
+
+      const d = await api(`messages/${encodeURIComponent(jid)}`);
+      setSelectedMessages(d.messages || []);
+      setSelectedDocs(d.documents || []);
+      setSelectedConv(d.conversation || null);
+
+      // Restore scroll position after update (with small delay for render)
+      setTimeout(() => {
+        const cont = messagesContainerRef.current;
+        if (cont) {
+          if (wasAtBottom || forceScrollToBottom) {
+            cont.scrollTop = cont.scrollHeight;
+          } else {
+            cont.scrollTop = scrollPos;
+          }
+        }
+      }, 100);
+    } catch {}
+  }, []);
   const loadAgentLogs = useCallback(async (type) => { try { const t = type !== undefined ? type : logTypeFilter; const p = new URLSearchParams({ limit: '100', offset: '0' }); if (t) p.append('type', t); const d = await api(`agent-log?${p}`); setAgentLogs(d.logs || []); setAgentLogTotal(d.total || 0); } catch {} }, [logTypeFilter]);
   const checkStatus = useCallback(async () => { try { const d = await api('status'); setConnected(d.status === 'connected'); setConnecting(d.status === 'connecting'); } catch {} }, []);
   const loadDossierProjects = useCallback(async (dossierId) => {
@@ -637,6 +663,12 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
 
   // ==================== SSE ====================
   useEffect(() => {
+    // Get logged in user from cookie
+    const cookies = document.cookie.split(';');
+    const userCookie = cookies.find(c => c.trim().startsWith('smartvalue_user='));
+    if (userCookie) {
+      setLoggedInUser(decodeURIComponent(userCookie.split('=')[1]));
+    }
     checkStatus(); loadConversations(); loadDocuments(); loadStarredConvs(); loadReminders();
     const es = new EventSource('/api/whatsapp/events'); eventSourceRef.current = es;
     es.onmessage = (event) => { try { const d = JSON.parse(event.data);
@@ -659,25 +691,35 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
         top: container.scrollHeight,
         behavior: smooth ? 'smooth' : 'auto'
       });
+      isUserAtBottomRef.current = true;
     }
+  }, []);
+
+  // Track if user is at bottom of messages container
+  const handleMessagesScroll = useCallback((e) => {
+    const container = e.target;
+    const threshold = 100; // pixels from bottom to consider "at bottom"
+    const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
+    isUserAtBottomRef.current = isAtBottom;
   }, []);
 
   // Reset et scroll quand on change de conversation
   useEffect(() => {
     lastMessageCountRef.current = 0;
+    isUserAtBottomRef.current = true; // Reset to bottom when changing conversation
     // Scroll immédiat (pas smooth) pour changement de conversation
     setTimeout(() => scrollToBottom(false), 100);
     setTimeout(() => scrollToBottom(false), 300);
   }, [selectedJid, scrollToBottom]);
 
-  // Scroll smooth quand un nouveau message arrive
+  // Scroll smooth quand un nouveau message arrive (seulement si l'utilisateur est en bas)
   useEffect(() => {
     if (selectedMessages.length > 0) {
       const isNewMessage = selectedMessages.length > lastMessageCountRef.current;
       lastMessageCountRef.current = selectedMessages.length;
 
-      if (isNewMessage) {
-        // Smooth scroll pour nouveau message
+      if (isNewMessage && isUserAtBottomRef.current) {
+        // Smooth scroll pour nouveau message seulement si l'utilisateur est en bas
         setTimeout(() => scrollToBottom(true), 50);
       }
     }
@@ -796,7 +838,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
   const fetchQR = async () => { const d = await api('qr'); if (d.qr) setQrImage(d.qr); };
   const handleDisconnect = async () => { await api('disconnect', 'POST'); setConnected(false); setConnecting(false); setQrImage(null); };
   const openConversation = (conv) => {
-    setSelectedJid(conv.jid); setView('detail'); lastMessageCountRef.current = 0; loadMessages(conv.jid); setEditingName(false); setEditingEmail(false); setSuggestedContact(null);
+    setSelectedJid(conv.jid); setView('detail'); lastMessageCountRef.current = 0; isUserAtBottomRef.current = true; loadMessages(conv.jid, true); setEditingName(false); setEditingEmail(false); setSuggestedContact(null);
     // Update URL with contact phone
     const phone = conv.phone || conv.jid.split('@')[0];
     window.history.pushState({}, '', `?contact=${phone}`);
@@ -1037,7 +1079,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       <Icon name={item.icon} className="w-4 h-4 flex-shrink-0" /><span className="flex-1 text-left">{item.label}</span>
       {item.badge > 0 && <span className="bg-emerald-500 text-white text-xs px-1.5 py-0.5 rounded-full">{item.badge}</span>}
     </button>))}</nav>
-    <div className="p-3 border-t border-gray-800"><div className="flex items-center gap-3 px-3 py-2"><div className="w-8 h-8 rounded-full bg-emerald-600 flex items-center justify-center text-xs font-bold">JY</div><div><p className="text-sm font-medium">Jeremy</p><p className="text-xs text-gray-400">Smart Value</p></div></div></div>
+    <div className="p-3 border-t border-gray-800"><div className="flex items-center gap-3 px-3 py-2"><div className={`w-8 h-8 rounded-full ${loggedInUser === 'Perrine' ? 'bg-pink-600' : 'bg-emerald-600'} flex items-center justify-center text-xs font-bold`}>{loggedInUser ? loggedInUser.substring(0, 2).toUpperCase() : 'SV'}</div><div><p className="text-sm font-medium">{loggedInUser || 'Smart Value'}</p><p className="text-xs text-gray-400">Smart Value</p></div></div></div>
   </div>);
 
   // ==================== CONVERSATION ROW ====================
@@ -1673,15 +1715,53 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
     // Message input state - INSIDE Detail to prevent parent re-render on typing
     const [messageText, setMessageText] = useState('');
     const [isSending, setIsSending] = useState(false);
+    const [isImproving, setIsImproving] = useState(false);
     const [detailTab, setDetailTab] = useState('messages'); // 'messages' or 'documents'
     const localInputRef = useRef(null);
+    const [currentUser, setCurrentUser] = useState('');
+
+    // Get current user from cookie for signature
+    useEffect(() => {
+      const cookies = document.cookie.split(';');
+      const userCookie = cookies.find(c => c.trim().startsWith('smartvalue_user='));
+      if (userCookie) {
+        setCurrentUser(decodeURIComponent(userCookie.split('=')[1]));
+      }
+    }, []);
+
+    // AI Text Improvement function
+    const improveText = async () => {
+      if (!messageText.trim() || isImproving) return;
+      setIsImproving(true);
+      try {
+        const res = await fetch('/api/ai/improve-text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: messageText, context: 'message WhatsApp professionnel mais cordial' })
+        });
+        const data = await res.json();
+        if (data.improved) {
+          setMessageText(data.improved);
+        }
+      } catch (err) {
+        console.error('Error improving text:', err);
+      }
+      setIsImproving(false);
+      localInputRef.current?.focus();
+    };
 
     // Get all downloadable media from messages (photos, videos, audios, documents)
     const conversationDocs = selectedMessages.filter(msg => msg.media_url);
 
     const sendMsg = async () => {
-      const text = messageText.trim();
+      let text = messageText.trim();
       if (!text || !selectedJid || isSending) return;
+
+      // Add signature for Perrine
+      if (currentUser === 'Perrine') {
+        text = text + '\n\n_Perrine Lhotel - Smart Value Assurances_';
+      }
+
       setIsSending(true);
       const optId = `opt_${Date.now()}`;
       const opt = { id: optId, text, from_me: true, timestamp: Date.now(), is_document: false };
@@ -1692,7 +1772,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
         loadConversations();
       } catch (err) {
         setSelectedMessages(prev => prev.filter(m => m.id !== optId));
-        setMessageText(text);
+        setMessageText(messageText); // Keep original without signature
         console.error('Send error:', err);
       }
       setIsSending(false);
@@ -2047,7 +2127,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
               </div>
             )}
             {/* Messages Tab */}
-            {detailTab === 'messages' && <div ref={messagesContainerRef} className="flex-1 bg-[#e5ddd5] rounded-xl border border-gray-200 p-4 space-y-2 overflow-y-auto" style={{backgroundImage:'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyBAMAAADsEZWCAAAAG1BMVEXd2tfd2tfd2tfd2tfd2tfd2tfd2tfd2tfd2tcEcYl5AAAACXRSTlMABAgMEBQYHCAk1OKnAAAAP0lEQVQ4y2NgGAWjYBSMgsENGP8TBIx/EQSMfxEE/+8iBhj/IggY/yIIGP8iBv4iBBj/IgQY/yIEGP8OUgAAAPsED0TzS7oAAAAASUVORK5CYII=")'}}>
+            {detailTab === 'messages' && <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className="flex-1 bg-[#e5ddd5] rounded-xl border border-gray-200 p-4 space-y-2 overflow-y-auto" style={{backgroundImage:'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyBAMAAADsEZWCAAAAG1BMVEXd2tfd2tfd2tfd2tfd2tfd2tfd2tfd2tfd2tcEcYl5AAAACXRSTlMABAgMEBQYHCAk1OKnAAAAP0lEQVQ4y2NgGAWjYBSMgsENGP8TBIx/EQSMfxEE/+8iBhj/IggY/yIIGP8iBv4iBBj/IgQY/yIEGP8OUgAAAPsED0TzS7oAAAAASUVORK5CYII=")'}}>
               {selectedMessages.map((msg, idx) => {
                 const prevMsg = idx > 0 ? selectedMessages[idx - 1] : null;
                 const curDate = getDateSeparator(msg.timestamp);
@@ -2104,10 +2184,28 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
                   value={messageText}
                   onChange={e => setMessageText(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); } }}
-                  disabled={isSending}
+                  disabled={isSending || isImproving}
                   className="flex-1 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100"
                   autoComplete="off"
                 />
+                {/* AI Improve button */}
+                <button
+                  type="button"
+                  onClick={(e) => { e.preventDefault(); improveText(); }}
+                  onMouseDown={(e) => e.preventDefault()}
+                  disabled={isImproving || !messageText.trim()}
+                  className={`px-3 py-2.5 rounded-xl transition-all flex items-center gap-1 ${isImproving ? 'bg-amber-300 text-amber-700' : messageText.trim() ? 'bg-amber-100 hover:bg-amber-200 text-amber-700' : 'bg-gray-100 text-gray-400'}`}
+                  title="Améliorer avec l'IA"
+                >
+                  {isImproving ? (
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                  ) : (
+                    <>
+                      <span>✨</span>
+                      <span className="text-xs font-medium">IA</span>
+                    </>
+                  )}
+                </button>
                 <button
                   onClick={sendMsg}
                   disabled={isSending || !messageText.trim()}
@@ -2309,8 +2407,8 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
                                           <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : ''}</span>
                                           <a href={t.url} target="_blank" rel="noopener" className={`text-xs flex-1 truncate ${isCompleted ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{t.name}</a>
                                           {t.date && !isCompleted && <span className={`text-xs ${dateStatus === 'overdue' ? 'text-red-600 font-medium' : dateStatus === 'today' ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
+                                          {t.note && <span className="w-2.5 h-2.5 bg-amber-400 rounded-full inline-block flex-shrink-0" title="Commentaires"></span>}
                                         </div>
-                                        {t.note && <p className="text-[11px] text-gray-500 ml-6 mt-0.5 line-clamp-2">{t.note}</p>}
                                       </div>
                                     );
                                   })}
@@ -2350,8 +2448,8 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
                                 <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : ''}</span>
                                 <a href={t.url} target="_blank" rel="noopener" className={`text-xs flex-1 truncate ${isCompleted ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{t.name}</a>
                                 {t.date && !isCompleted && <span className={`text-xs ${dateStatus === 'overdue' ? 'text-red-600 font-medium' : dateStatus === 'today' ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
+                                {t.note && <span className="w-2.5 h-2.5 bg-amber-400 rounded-full inline-block flex-shrink-0" title="Commentaires"></span>}
                               </div>
-                              {t.note && <p className="text-[11px] text-gray-500 ml-6 mt-0.5 line-clamp-2">{t.note}</p>}
                             </div>
                           );
                         })}
@@ -2531,8 +2629,8 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
                                         <span className="text-xs">{t.priority?.includes('Urg') ? '🔴' : t.priority === 'Important' ? '🟠' : ''}</span>
                                         <a href={t.url} target="_blank" rel="noopener" className={`text-xs flex-1 truncate ${isCompleted ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{t.name}</a>
                                         {t.date && !isCompleted && <span className={`text-xs ${getDateStatus(t.date) === 'overdue' ? 'text-red-600 font-medium' : getDateStatus(t.date) === 'today' ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>{new Date(t.date).toLocaleDateString('fr-FR', {day:'numeric',month:'short'})}</span>}
+                                        {t.note && <span className="w-2.5 h-2.5 bg-amber-400 rounded-full inline-block flex-shrink-0" title="Commentaires"></span>}
                                       </div>
-                                      {t.note && <p className="text-[11px] text-gray-500 ml-6 mt-0.5 line-clamp-2">{t.note}</p>}
                                     </div>
                                   );
                                 })}

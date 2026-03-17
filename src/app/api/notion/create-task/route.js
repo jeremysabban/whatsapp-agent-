@@ -34,10 +34,12 @@ export async function POST(request) {
       };
     }
 
-    // Set assignee if provided (select type)
+    // Set assignee if provided (multi_select type)
     if (assignee) {
+      // Handle "Jeremy, Perrine" as multiple selections
+      const assignees = assignee.split(', ').map(name => ({ name: name.trim() }));
       properties['Responsable'] = {
-        select: { name: assignee }
+        multi_select: assignees
       };
     }
 

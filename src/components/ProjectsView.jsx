@@ -283,7 +283,7 @@ export default function ProjectsView({ projectsData, projectsHasLoaded, onProjec
   };
 
   const createTask = async () => {
-    if (!newTaskName.trim() || !newTaskModal) return;
+    if (!newTaskName.trim() || !newTaskModal || !newTaskDate || !newTaskAssignee) return;
     setCreatingTask(true);
 
     try {
@@ -682,6 +682,16 @@ export default function ProjectsView({ projectsData, projectsHasLoaded, onProjec
                                     {new Date(task.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
                                   </span>
                                 )}
+                                {/* Yellow dot for comments */}
+                                {task.note && (
+                                  <div className="relative group">
+                                    <span className="w-3 h-3 bg-amber-400 rounded-full inline-block cursor-help" title="Commentaires"></span>
+                                    <div className="absolute right-0 top-5 z-50 hidden group-hover:block w-64 p-2 bg-white border border-amber-200 rounded-lg shadow-lg text-xs text-gray-700 whitespace-pre-wrap">
+                                      <p className="font-semibold text-amber-700 mb-1">📝 Commentaires</p>
+                                      {task.note}
+                                    </div>
+                                  </div>
+                                )}
                                 <button
                                   onClick={(e) => { e.stopPropagation(); setDeleteTaskModal({ taskId: task.id, taskName: task.name, projectId: project.id }); }}
                                   className="p-1 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
@@ -768,13 +778,14 @@ export default function ProjectsView({ projectsData, projectsHasLoaded, onProjec
             />
 
             <div className="mb-3">
-              <label className="block text-xs text-gray-500 mb-1">Date d'échéance</label>
+              <label className="block text-xs text-gray-500 mb-1">Date d'échéance <span className="text-red-500">*</span></label>
               <input
                 type="date"
                 value={newTaskDate}
                 onChange={e => setNewTaskDate(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                className={`w-full px-4 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 ${!newTaskDate ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
               />
+              {!newTaskDate && <p className="text-xs text-red-500 mt-1">Échéance obligatoire</p>}
             </div>
 
             <div className="mb-3">
@@ -833,17 +844,8 @@ export default function ProjectsView({ projectsData, projectsHasLoaded, onProjec
             </select>
 
             <div className="mb-4">
-              <label className="block text-xs text-gray-500 mb-1">Responsable</label>
+              <label className="block text-xs text-gray-500 mb-1">Responsable <span className="text-red-500">*</span></label>
               <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setNewTaskAssignee('')}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    newTaskAssignee === '' ? 'bg-gray-200 text-gray-800' : 'bg-gray-100 text-gray-500 hover:bg-gray-150'
-                  }`}
-                >
-                  Aucun
-                </button>
                 <button
                   type="button"
                   onClick={() => setNewTaskAssignee('Jeremy')}
@@ -862,7 +864,17 @@ export default function ProjectsView({ projectsData, projectsHasLoaded, onProjec
                 >
                   👤 Perrine
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setNewTaskAssignee('Jeremy, Perrine')}
+                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    newTaskAssignee === 'Jeremy, Perrine' ? 'bg-purple-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                  }`}
+                >
+                  👥 Commun
+                </button>
               </div>
+              {!newTaskAssignee && <p className="text-xs text-red-500 mt-1">Responsable obligatoire</p>}
             </div>
 
             <div className="flex gap-3">
@@ -874,7 +886,7 @@ export default function ProjectsView({ projectsData, projectsHasLoaded, onProjec
               </button>
               <button
                 onClick={createTask}
-                disabled={!newTaskName.trim() || creatingTask}
+                disabled={!newTaskName.trim() || !newTaskDate || !newTaskAssignee || creatingTask}
                 className="flex-1 py-2.5 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50"
               >
                 {creatingTask ? 'Création...' : 'Créer'}
@@ -1153,26 +1165,48 @@ export default function ProjectsView({ projectsData, projectsHasLoaded, onProjec
                 </button>
 
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Responsable</label>
-                  <select
-                    value={followUpAssignee}
-                    onChange={(e) => setFollowUpAssignee(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
-                  >
-                    <option value="">Aucun</option>
-                    <option value="Jeremy">Jeremy</option>
-                    <option value="Perrine">Perrine</option>
-                  </select>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Responsable <span className="text-red-500">*</span></label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setFollowUpAssignee('Jeremy')}
+                      className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        followUpAssignee === 'Jeremy' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                      }`}
+                    >
+                      👤 Jeremy
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFollowUpAssignee('Perrine')}
+                      className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        followUpAssignee === 'Perrine' ? 'bg-yellow-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                      }`}
+                    >
+                      👤 Perrine
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFollowUpAssignee('Jeremy, Perrine')}
+                      className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                        followUpAssignee === 'Jeremy, Perrine' ? 'bg-purple-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
+                      }`}
+                    >
+                      👥 Commun
+                    </button>
+                  </div>
+                  {!followUpAssignee && <p className="text-xs text-red-500 mt-1">Responsable obligatoire</p>}
                 </div>
 
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Date d'échéance</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Date d'échéance <span className="text-red-500">*</span></label>
                   <input
                     type="date"
                     value={followUpDate}
                     onChange={(e) => setFollowUpDate(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    className={`w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 ${!followUpDate ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
                   />
+                  {!followUpDate && <p className="text-xs text-red-500 mt-1">Échéance obligatoire</p>}
                 </div>
 
                 <div className="mb-4">
@@ -1226,7 +1260,7 @@ export default function ProjectsView({ projectsData, projectsHasLoaded, onProjec
                   </button>
                   <button
                     onClick={handleCreateFollowUp}
-                    disabled={creatingFollowUp}
+                    disabled={creatingFollowUp || !followUpDate || !followUpAssignee || followUpTasks.filter(t => t.trim()).length === 0}
                     className="flex-1 py-2.5 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50"
                   >
                     {creatingFollowUp ? 'Création...' : 'Créer et terminer'}

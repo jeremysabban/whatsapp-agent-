@@ -54,11 +54,14 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
   const [detailSaving, setDetailSaving] = useState(false);
   const [showProjectSelector, setShowProjectSelector] = useState(false);
   const [newTaskName, setNewTaskName] = useState('');
+  const [newTaskDate, setNewTaskDate] = useState('');
+  const [newTaskAssignee, setNewTaskAssignee] = useState('');
   const [showAddTask, setShowAddTask] = useState(false);
   const [detailNote, setDetailNote] = useState('');
   const [editingNote, setEditingNote] = useState(false);
   const [currentUser, setCurrentUser] = useState('');
   const [taskJustCompleted, setTaskJustCompleted] = useState(null); // Task that was just completed
+  const [isImproving, setIsImproving] = useState(false); // AI text improvement
 
   // Get current user from cookie
   useEffect(() => {
@@ -69,6 +72,16 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
     }
   }, []);
 
+  // Reset form when changing tasks
+  useEffect(() => {
+    setNewTaskName('');
+    setNewTaskDate('');
+    setNewTaskAssignee('');
+    setShowAddTask(false);
+    setDetailNote(detailTask?.note || '');
+    setEditingNote(false);
+  }, [detailTask?.id]);
+
   // Add a comment line with timestamp and user
   const addCommentLine = () => {
     const now = new Date();
@@ -78,6 +91,26 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
     const newNote = detailNote ? detailNote + '\n' + prefix : prefix;
     setDetailNote(newNote);
     setEditingNote(true);
+  };
+
+  // AI Text Improvement function
+  const improveText = async () => {
+    if (!detailNote.trim() || isImproving) return;
+    setIsImproving(true);
+    try {
+      const res = await fetch('/api/ai/improve-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: detailNote, context: 'note ou commentaire professionnel sur une tâche' })
+      });
+      const data = await res.json();
+      if (data.improved) {
+        setDetailNote(data.improved);
+      }
+    } catch (err) {
+      console.error('Error improving text:', err);
+    }
+    setIsImproving(false);
   };
 
   // Load tasks (force refresh from Notion if forceRefresh=true)
@@ -393,22 +426,45 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
 
   // Add task to project
   const addTaskToProject = async () => {
-    if (!newTaskName.trim() || !detailTask?.projectId) return;
+    if (!newTaskName.trim() || !newTaskDate || !newTaskAssignee) return;
+    // If no project, still allow creating task for dossier
+    const taskData = {
+      name: newTaskName,
+      dossierId: detailTask?.dossierId,
+      date: newTaskDate,
+      assignee: newTaskAssignee
+    };
+    if (detailTask?.projectId) {
+      taskData.projectId = detailTask.projectId;
+    }
+
     setDetailSaving(true);
     try {
       const res = await fetch('/api/notion/create-task', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: newTaskName,
-          projectId: detailTask.projectId,
-          dossierId: detailTask.dossierId
-        })
+        body: JSON.stringify(taskData)
       });
       if (res.ok) {
+        const result = await res.json();
         setNewTaskName('');
+        setNewTaskDate('');
+        setNewTaskAssignee('');
         setShowAddTask(false);
+        // Refresh tasks and show the new task
         await loadTasks(true);
+        // If we have a new task, show it
+        if (result.task?.id) {
+          // Find the new task in refreshed data (will be available after loadTasks)
+          setTimeout(() => {
+            const newTask = tasksData?.tasks?.find(t => t.id === result.task.id);
+            if (newTask) {
+              setDetailTask(newTask);
+              setDetailNote(newTask.note || '');
+              setEditingNote(false);
+            }
+          }, 500);
+        }
       }
     } catch (err) {
       console.error('Error creating task:', err);
@@ -518,12 +574,24 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
         </button>
 
         <div className="flex-1 min-w-0">
-          <button
-            onClick={() => setDetailTask(task)}
-            className={`text-sm ${textClass} text-left hover:underline`}
-          >
-            {task.name}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setDetailTask(task)}
+              className={`text-sm ${textClass} text-left hover:underline`}
+            >
+              {task.name}
+            </button>
+            {/* Yellow dot for comments - hover to show */}
+            {task.note && (
+              <div className="relative group">
+                <span className="w-3 h-3 bg-amber-400 rounded-full inline-block cursor-help flex-shrink-0" title="Commentaires"></span>
+                <div className="absolute left-0 top-5 z-50 hidden group-hover:block w-64 p-2 bg-white border border-amber-200 rounded-lg shadow-lg text-xs text-gray-700 whitespace-pre-wrap">
+                  <p className="font-semibold text-amber-700 mb-1">📝 Commentaires</p>
+                  {task.note}
+                </div>
+              </div>
+            )}
+          </div>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             {/* Assignee - first position for visibility */}
             {task.assignee && (
@@ -1090,23 +1158,33 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
                       placeholder="Ajouter un commentaire..."
                       className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 min-h-[80px]"
                     />
-                    <button
-                      onClick={saveDetailNote}
-                      disabled={detailSaving}
-                      className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-sm hover:bg-amber-600 disabled:opacity-50"
-                    >
-                      {detailSaving ? 'Enregistrement...' : 'Enregistrer'}
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={improveText}
+                        disabled={isImproving || !detailNote.trim()}
+                        className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-1 ${isImproving ? 'bg-amber-200 text-amber-600' : detailNote.trim() ? 'bg-amber-100 hover:bg-amber-200 text-amber-700' : 'bg-gray-100 text-gray-400'}`}
+                        title="Améliorer avec l'IA"
+                      >
+                        {isImproving ? (
+                          <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                        ) : (
+                          <span>✨</span>
+                        )}
+                        Améliorer
+                      </button>
+                      <button
+                        onClick={saveDetailNote}
+                        disabled={detailSaving}
+                        className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-sm hover:bg-amber-600 disabled:opacity-50"
+                      >
+                        {detailSaving ? 'Enregistrement...' : 'Enregistrer'}
+                      </button>
+                    </div>
                   </div>
                 ) : detailTask.note ? (
                   <p className="text-sm text-gray-700 whitespace-pre-wrap">{detailTask.note}</p>
                 ) : (
-                  <button
-                    onClick={() => { setEditingNote(true); setDetailNote(''); }}
-                    className="text-sm text-amber-600 hover:text-amber-800 italic"
-                  >
-                    + Ajouter un commentaire
-                  </button>
+                  <p className="text-sm text-gray-400 italic">Aucun commentaire</p>
                 )}
               </div>
 
@@ -1193,21 +1271,53 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
                     </button>
                   </div>
                   {showAddTask && (
-                    <div className="flex gap-2 mb-2">
+                    <div className="space-y-2 mb-3 p-3 bg-sky-50 rounded-lg border border-sky-200">
                       <input
                         type="text"
                         value={newTaskName}
                         onChange={(e) => setNewTaskName(e.target.value)}
                         placeholder="Nom de la nouvelle tâche..."
-                        className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-400"
-                        onKeyDown={(e) => e.key === 'Enter' && addTaskToProject()}
+                        className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-400"
                       />
+                      <div className="flex gap-2">
+                        <div className="flex-1">
+                          <label className="block text-xs text-gray-500 mb-1">Échéance <span className="text-red-500">*</span></label>
+                          <input
+                            type="date"
+                            value={newTaskDate}
+                            onChange={(e) => setNewTaskDate(e.target.value)}
+                            className={`w-full px-2 py-1.5 border rounded text-xs ${!newTaskDate ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-500 mb-1">Responsable <span className="text-red-500">*</span></label>
+                        <div className="flex gap-1">
+                          {['Jeremy', 'Perrine', 'Jeremy, Perrine'].map(a => (
+                            <button
+                              key={a}
+                              type="button"
+                              onClick={() => setNewTaskAssignee(a)}
+                              className={`flex-1 px-2 py-1.5 rounded text-xs font-medium transition-colors ${
+                                newTaskAssignee === a
+                                  ? a === 'Jeremy' ? 'bg-blue-500 text-white'
+                                    : a === 'Perrine' ? 'bg-yellow-500 text-white'
+                                    : 'bg-purple-500 text-white'
+                                  : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
+                              }`}
+                            >
+                              {a === 'Jeremy, Perrine' ? '👥' : '👤'} {a === 'Jeremy, Perrine' ? 'Commun' : a}
+                            </button>
+                          ))}
+                        </div>
+                        {!newTaskAssignee && <p className="text-xs text-red-500 mt-1">Obligatoire</p>}
+                      </div>
                       <button
                         onClick={addTaskToProject}
-                        disabled={detailSaving || !newTaskName.trim()}
-                        className="px-3 py-2 bg-sky-500 text-white rounded-lg text-sm hover:bg-sky-600 disabled:opacity-50"
+                        disabled={detailSaving || !newTaskName.trim() || !newTaskDate || !newTaskAssignee}
+                        className="w-full px-3 py-2 bg-sky-500 text-white rounded-lg text-sm hover:bg-sky-600 disabled:opacity-50"
                       >
-                        {detailSaving ? '...' : 'Ajouter'}
+                        {detailSaving ? 'Création...' : 'Créer la tâche'}
                       </button>
                     </div>
                   )}
