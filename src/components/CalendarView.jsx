@@ -320,10 +320,16 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
     setSavingEdit(false);
   };
 
-  // Quick update assignee from detail modal
+  // Quick update assignee from detail modal (optimistic update)
   const updateDetailAssignee = async (newAssignee) => {
     if (!detailTask) return;
+
+    // Optimistic update - show immediately
+    const previousAssignee = detailTask.assignee;
+    setDetailTask({ ...detailTask, assignee: newAssignee });
+    setDetailAssigneeOpen(false);
     setDetailSaving(true);
+
     try {
       const res = await fetch('/api/notion/update-task', {
         method: 'POST',
@@ -336,14 +342,18 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
         })
       });
       if (res.ok) {
-        setDetailTask({ ...detailTask, assignee: newAssignee });
-        await loadTasks(true);
+        // Refresh cache in background
+        loadTasks(true);
+      } else {
+        // Revert on error
+        setDetailTask({ ...detailTask, assignee: previousAssignee });
       }
     } catch (err) {
       console.error('Error updating assignee:', err);
+      // Revert on error
+      setDetailTask({ ...detailTask, assignee: previousAssignee });
     }
     setDetailSaving(false);
-    setDetailAssigneeOpen(false);
   };
 
   // Link project to task
@@ -399,10 +409,16 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
     setDetailSaving(false);
   };
 
-  // Save note/comment
+  // Save note/comment (optimistic update)
   const saveDetailNote = async () => {
     if (!detailTask) return;
+
+    // Optimistic update - show immediately
+    const previousNote = detailTask.note;
+    setDetailTask({ ...detailTask, note: detailNote });
+    setEditingNote(false);
     setDetailSaving(true);
+
     try {
       const res = await fetch('/api/notion/update-task', {
         method: 'POST',
@@ -415,14 +431,20 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
         })
       });
       if (res.ok) {
-        setDetailTask({ ...detailTask, note: detailNote });
-        await loadTasks(true);
+        // Refresh cache in background
+        loadTasks(true);
+      } else {
+        // Revert on error
+        setDetailTask({ ...detailTask, note: previousNote });
+        setDetailNote(previousNote || '');
       }
     } catch (err) {
       console.error('Error saving note:', err);
+      // Revert on error
+      setDetailTask({ ...detailTask, note: previousNote });
+      setDetailNote(previousNote || '');
     }
     setDetailSaving(false);
-    setEditingNote(false);
   };
 
   // Format event time
