@@ -157,19 +157,22 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
   };
 
   // Filter tasks for selected date (open tasks)
+  // Compare date strings directly to avoid timezone issues
+  const selectedDateStr = formatDateForApi(selectedDate); // "YYYY-MM-DD"
   const tasksForDate = (tasksData?.tasks || []).filter(task => {
     if (!task.date || task.completed) return false;
     if (!matchesAssigneeFilter(task)) return false;
-    const taskDate = new Date(task.date);
-    return taskDate.toDateString() === selectedDate.toDateString();
+    const taskDateStr = task.date.split('T')[0]; // Extract "YYYY-MM-DD" from date string
+    return taskDateStr === selectedDateStr;
   });
 
   // Filter completed tasks for selected date
+  // Compare date strings directly to avoid timezone issues
   const completedTasksForDate = (tasksData?.tasks || []).filter(task => {
     if (!task.date || !task.completed) return false;
     if (!matchesAssigneeFilter(task)) return false;
-    const taskDate = new Date(task.date);
-    return taskDate.toDateString() === selectedDate.toDateString();
+    const taskDateStr = task.date.split('T')[0]; // Extract "YYYY-MM-DD"
+    return taskDateStr === selectedDateStr;
   });
 
   // Toggle task completion
