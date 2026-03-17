@@ -1000,7 +1000,8 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
                       className="text-xs text-amber-600 hover:text-amber-800"
                     >
                       {editingNote ? 'Annuler' : (detailTask.note ? 'Modifier' : 'Ajouter')}
-                  </button>
+                    </button>
+                  </div>
                 </div>
                 {editingNote ? (
                   <div className="space-y-2">
