@@ -44,6 +44,20 @@ export async function POST(req) {
       }
     }
 
+    // Handle note/comment (rich_text) - try common property names
+    if (updates.note !== undefined) {
+      properties['Note'] = { rich_text: updates.note ? [{ text: { content: updates.note } }] : [] };
+    }
+
+    // Handle project link (relation)
+    if (updates.projectId !== undefined) {
+      if (updates.projectId) {
+        properties['Projet'] = { relation: [{ id: updates.projectId }] };
+      } else {
+        properties['Projet'] = { relation: [] };
+      }
+    }
+
     const res = await fetch(`https://api.notion.com/v1/pages/${taskId}`, {
       method: 'PATCH',
       headers: notionHeaders(),
