@@ -48,6 +48,9 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
   const [editAssignee, setEditAssignee] = useState([]); // Array: [], ['Jeremy'], ['Perrine'], ['Jeremy', 'Perrine']
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Task detail modal state (fiche tâche)
+  const [detailTask, setDetailTask] = useState(null);
+
   // Load tasks (force refresh from Notion if forceRefresh=true)
   const loadTasks = async (forceRefresh = false) => {
     if (!forceRefresh && tasksData?.tasks?.length > 0) return;
@@ -318,7 +321,12 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
         </button>
 
         <div className="flex-1 min-w-0">
-          <p className={`text-sm ${textClass}`}>{task.name}</p>
+          <button
+            onClick={() => setDetailTask(task)}
+            className={`text-sm ${textClass} text-left hover:underline`}
+          >
+            {task.name}
+          </button>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
             {/* Assignee - first position for visibility */}
             {task.assignee && (
@@ -730,6 +738,195 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
                 className="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50"
               >
                 {savingEdit ? 'Enregistrement...' : 'Enregistrer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Task Detail Modal (Fiche Tâche) */}
+      {detailTask && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setDetailTask(null)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-indigo-50 to-purple-50">
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <h3 className="font-bold text-lg text-gray-900">{detailTask.name}</h3>
+                  <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+                    <span>Créée le {new Date(detailTask.createdAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                  </div>
+                </div>
+                <button onClick={() => setDetailTask(null)} className="p-1 hover:bg-gray-200 rounded">
+                  <svg className="w-5 h-5 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M18 6 6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {/* Status badges */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Priority */}
+                {detailTask.priority && (
+                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                    detailTask.priority === 'Urgent & Important' ? 'bg-red-100 text-red-700' :
+                    detailTask.priority === 'Non Urgent & Important' ? 'bg-orange-100 text-orange-700' :
+                    detailTask.priority === 'Urgent & Non Important' ? 'bg-yellow-100 text-yellow-700' :
+                    'bg-gray-100 text-gray-600'
+                  }`}>
+                    {detailTask.priority}
+                  </span>
+                )}
+                {/* Task type */}
+                {detailTask.taskType && TASK_TYPE_STYLES[detailTask.taskType] && (
+                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${TASK_TYPE_STYLES[detailTask.taskType].bg} ${TASK_TYPE_STYLES[detailTask.taskType].text}`}>
+                    {TASK_TYPE_STYLES[detailTask.taskType].emoji} {detailTask.taskType}
+                  </span>
+                )}
+                {/* Due date */}
+                {detailTask.date && (
+                  <span className="px-3 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700">
+                    📅 {new Date(detailTask.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                  </span>
+                )}
+                {/* Completion status */}
+                <span className={`px-3 py-1 rounded-full text-xs font-medium ${detailTask.completed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                  {detailTask.completed ? '✓ Terminée' : '○ En cours'}
+                </span>
+              </div>
+
+              {/* Owner/Assignee */}
+              <div className="bg-gray-50 rounded-lg p-3">
+                <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2">Responsable</h4>
+                {detailTask.assignee ? (
+                  <div className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium ${
+                    detailTask.assignee.includes('Jeremy') && detailTask.assignee.includes('Perrine')
+                      ? 'bg-purple-100 text-purple-700'
+                      : detailTask.assignee.includes('Jeremy')
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'bg-yellow-100 text-yellow-700'
+                  }`}>
+                    {detailTask.assignee.includes('Jeremy') && detailTask.assignee.includes('Perrine') ? '👥' : '👤'}
+                    {detailTask.assignee}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400 italic">Non assigné</p>
+                )}
+              </div>
+
+              {/* Note/Comments */}
+              {detailTask.note && (
+                <div className="bg-amber-50 rounded-lg p-3 border border-amber-100">
+                  <h4 className="text-xs font-semibold text-amber-700 uppercase mb-2">📝 Notes / Commentaires</h4>
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{detailTask.note}</p>
+                </div>
+              )}
+
+              {/* Dossier */}
+              {detailTask.dossier && (
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2">📁 Dossier rattaché</h4>
+                  <button
+                    onClick={() => { setDetailTask(null); onOpenDossier && onOpenDossier(detailTask.dossier.id); }}
+                    className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors text-sm"
+                  >
+                    <span className="font-medium text-gray-900">{detailTask.dossier.name}</span>
+                    {detailTask.dossier.phone && <span className="text-gray-500">• {detailTask.dossier.phone}</span>}
+                  </button>
+                </div>
+              )}
+
+              {/* Project */}
+              <div className="bg-purple-50 rounded-lg p-3">
+                <h4 className="text-xs font-semibold text-purple-700 uppercase mb-2">📋 Projet rattaché</h4>
+                {detailTask.project ? (
+                  <button
+                    onClick={() => { setDetailTask(null); onOpenProject && onOpenProject(detailTask.projectId); }}
+                    className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg border border-purple-200 hover:bg-purple-100 transition-colors text-sm"
+                  >
+                    <span className="font-medium text-purple-900">{detailTask.project.name}</span>
+                    {detailTask.project.type && <span className="px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-600">{detailTask.project.type}</span>}
+                  </button>
+                ) : (
+                  <p className="text-sm text-gray-500 italic">Aucun projet rattaché</p>
+                )}
+              </div>
+
+              {/* Related tasks from same project */}
+              {detailTask.projectId && (
+                <div className="border-t border-gray-100 pt-4">
+                  <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2">Autres tâches du projet</h4>
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {(tasksData?.tasks || [])
+                      .filter(t => t.projectId === detailTask.projectId && t.id !== detailTask.id)
+                      .slice(0, 5)
+                      .map(t => (
+                        <button
+                          key={t.id}
+                          onClick={() => setDetailTask(t)}
+                          className={`w-full text-left px-2 py-1.5 rounded text-xs hover:bg-gray-100 flex items-center gap-2 ${t.completed ? 'text-gray-400' : 'text-gray-700'}`}
+                        >
+                          <span className={`w-3 h-3 rounded border ${t.completed ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'}`}></span>
+                          <span className={t.completed ? 'line-through' : ''}>{t.name}</span>
+                          {t.date && <span className="text-gray-400 ml-auto">{new Date(t.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}</span>}
+                        </button>
+                      ))}
+                    {(tasksData?.tasks || []).filter(t => t.projectId === detailTask.projectId && t.id !== detailTask.id).length === 0 && (
+                      <p className="text-xs text-gray-400 italic">Aucune autre tâche sur ce projet</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Related tasks from same dossier */}
+              {detailTask.dossierId && (
+                <div className="border-t border-gray-100 pt-4">
+                  <h4 className="text-xs font-semibold text-gray-500 uppercase mb-2">Autres tâches du dossier</h4>
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {(tasksData?.tasks || [])
+                      .filter(t => t.dossierId === detailTask.dossierId && t.id !== detailTask.id && t.projectId !== detailTask.projectId)
+                      .slice(0, 5)
+                      .map(t => (
+                        <button
+                          key={t.id}
+                          onClick={() => setDetailTask(t)}
+                          className={`w-full text-left px-2 py-1.5 rounded text-xs hover:bg-gray-100 flex items-center gap-2 ${t.completed ? 'text-gray-400' : 'text-gray-700'}`}
+                        >
+                          <span className={`w-3 h-3 rounded border ${t.completed ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'}`}></span>
+                          <span className={t.completed ? 'line-through' : ''}>{t.name}</span>
+                          {t.project?.name && <span className="text-purple-500 text-xs ml-1">({t.project.name})</span>}
+                        </button>
+                      ))}
+                    {(tasksData?.tasks || []).filter(t => t.dossierId === detailTask.dossierId && t.id !== detailTask.id && t.projectId !== detailTask.projectId).length === 0 && (
+                      <p className="text-xs text-gray-400 italic">Aucune autre tâche sur ce dossier</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer actions */}
+            <div className="p-4 border-t border-gray-100 flex justify-between">
+              <button
+                onClick={() => { setDetailTask(null); openEditModal(detailTask); }}
+                className="px-4 py-2 text-sm bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center gap-2"
+              >
+                <Icon name="edit" className="w-4 h-4" />
+                Modifier
+              </button>
+              <button
+                onClick={() => { toggleTask(detailTask, !detailTask.completed); setDetailTask(null); }}
+                className={`px-4 py-2 text-sm rounded-lg flex items-center gap-2 ${
+                  detailTask.completed
+                    ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                    : 'bg-emerald-500 text-white hover:bg-emerald-600'
+                }`}
+              >
+                <Icon name="check" className="w-4 h-4" />
+                {detailTask.completed ? 'Réouvrir' : 'Terminer'}
               </button>
             </div>
           </div>
