@@ -320,6 +320,19 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
         <div className="flex-1 min-w-0">
           <p className={`text-sm ${textClass}`}>{task.name}</p>
           <div className="flex items-center gap-2 mt-1 flex-wrap">
+            {/* Assignee - first position for visibility */}
+            {task.assignee && (
+              <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
+                task.assignee.includes('Jeremy') && task.assignee.includes('Perrine')
+                  ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                  : task.assignee.includes('Jeremy')
+                    ? 'bg-blue-100 text-blue-700 border border-blue-200'
+                    : 'bg-yellow-100 text-yellow-700 border border-yellow-200'
+              }`}>
+                {task.assignee.includes('Jeremy') && task.assignee.includes('Perrine') ? '👥' : '👤'}
+                {task.assignee.includes('Jeremy') && task.assignee.includes('Perrine') ? 'Commun' : task.assignee}
+              </span>
+            )}
             {/* Date for overdue */}
             {isOverdue && (
               <span className="px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700">
@@ -330,15 +343,6 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
             {typeStyle && (
               <span className={`px-2 py-0.5 rounded text-xs font-medium ${typeStyle.bg} ${typeStyle.text} border ${typeStyle.border}`}>
                 {typeStyle.emoji} {task.taskType}
-              </span>
-            )}
-            {/* Assignee */}
-            {task.assignee && (
-              <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
-                task.assignee === 'Jeremy' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'
-              }`}>
-                <Icon name="user" className="w-3 h-3" />
-                {task.assignee}
               </span>
             )}
             {/* Dossier - clickable */}
