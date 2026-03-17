@@ -324,9 +324,13 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
   const updateDetailAssignee = async (newAssignee) => {
     if (!detailTask) return;
 
-    // Optimistic update - show immediately
+    // Store current task data
+    const taskId = detailTask.id;
     const previousAssignee = detailTask.assignee;
-    setDetailTask({ ...detailTask, assignee: newAssignee });
+    const updatedTask = { ...detailTask, assignee: newAssignee };
+
+    // Optimistic update - show immediately
+    setDetailTask(updatedTask);
     setDetailAssigneeOpen(false);
     setDetailSaving(true);
 
@@ -335,15 +339,17 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          taskId: detailTask.id,
+          taskId: taskId,
           updates: { assignee: newAssignee },
           dossierId: detailTask.dossierId,
           taskName: detailTask.name
         })
       });
       if (res.ok) {
-        // Refresh cache in background
+        // Refresh cache in background but keep modal with updated task
         loadTasks(true);
+        // Keep the modal open with updated data
+        setDetailTask(updatedTask);
       } else {
         // Revert on error
         setDetailTask({ ...detailTask, assignee: previousAssignee });
@@ -413,9 +419,13 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
   const saveDetailNote = async () => {
     if (!detailTask) return;
 
-    // Optimistic update - show immediately
+    // Store current task data
+    const taskId = detailTask.id;
     const previousNote = detailTask.note;
-    setDetailTask({ ...detailTask, note: detailNote });
+    const updatedTask = { ...detailTask, note: detailNote };
+
+    // Optimistic update - show immediately
+    setDetailTask(updatedTask);
     setEditingNote(false);
     setDetailSaving(true);
 
@@ -424,15 +434,16 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          taskId: detailTask.id,
+          taskId: taskId,
           updates: { note: detailNote },
           dossierId: detailTask.dossierId,
           taskName: detailTask.name
         })
       });
       if (res.ok) {
-        // Refresh cache in background
+        // Refresh cache in background but keep modal with updated task
         loadTasks(true);
+        setDetailTask(updatedTask);
       } else {
         // Revert on error
         setDetailTask({ ...detailTask, note: previousNote });
