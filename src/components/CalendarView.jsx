@@ -22,6 +22,7 @@ function Icon({ name, className = 'w-4 h-4' }) {
 const TASK_TYPE_STYLES = {
   Appel: { emoji: '📞', bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
   Email: { emoji: '📧', bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+  WhatsApp: { emoji: '💬', bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
   Autre: { emoji: '✅', bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200' }
 };
 
@@ -36,6 +37,7 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
 
   // Assignee filter state
   const [assigneeFilter, setAssigneeFilter] = useState('all'); // 'all', 'jeremy', 'perrine', 'common'
+  const [showCompleted, setShowCompleted] = useState(false); // Show completed tasks for the day
 
   // Edit task modal state
   const [editTaskModal, setEditTaskModal] = useState(null);
@@ -154,9 +156,17 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
     return true;
   };
 
-  // Filter tasks for selected date
+  // Filter tasks for selected date (open tasks)
   const tasksForDate = (tasksData?.tasks || []).filter(task => {
     if (!task.date || task.completed) return false;
+    if (!matchesAssigneeFilter(task)) return false;
+    const taskDate = new Date(task.date);
+    return taskDate.toDateString() === selectedDate.toDateString();
+  });
+
+  // Filter completed tasks for selected date
+  const completedTasksForDate = (tasksData?.tasks || []).filter(task => {
+    if (!task.date || !task.completed) return false;
     if (!matchesAssigneeFilter(task)) return false;
     const taskDate = new Date(task.date);
     return taskDate.toDateString() === selectedDate.toDateString();
@@ -428,7 +438,7 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
         )}
 
         {/* Assignee filter */}
-        <div className="flex items-center justify-center gap-2 mt-3">
+        <div className="flex items-center justify-center gap-2 mt-3 flex-wrap">
           <span className="text-xs text-gray-500">Filtrer:</span>
           {[
             { id: 'all', label: 'Tous' },
@@ -448,6 +458,17 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
               {f.label}
             </button>
           ))}
+          <span className="text-gray-300">|</span>
+          <button
+            onClick={() => setShowCompleted(!showCompleted)}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+              showCompleted
+                ? 'bg-emerald-600 text-white'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            ✓ Terminées ({completedTasksForDate.length})
+          </button>
         </div>
       </div>
 
@@ -530,6 +551,49 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
           )}
         </div>
 
+        {/* Completed tasks for the day */}
+        {showCompleted && completedTasksForDate.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden opacity-75">
+            <div className="px-4 py-3 bg-gray-100 border-b border-gray-200">
+              <h2 className="font-semibold text-gray-600 flex items-center gap-2">
+                <Icon name="check" className="w-4 h-4" />
+                Tâches terminées du jour ({completedTasksForDate.length})
+              </h2>
+            </div>
+            <div className="divide-y divide-gray-100">
+              {completedTasksForDate.map(task => (
+                <div key={task.id} className="px-4 py-3 flex items-start gap-3 bg-gray-50">
+                  <button
+                    onClick={() => toggleTask(task, false)}
+                    disabled={togglingTaskId === task.id}
+                    className="mt-0.5 w-5 h-5 rounded border-2 bg-emerald-500 border-emerald-500 text-white flex items-center justify-center transition-colors flex-shrink-0"
+                  >
+                    <Icon name="check" className="w-3 h-3" />
+                  </button>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-400 line-through">{task.name}</p>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      {task.assignee && (
+                        <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-500">
+                          {task.assignee}
+                        </span>
+                      )}
+                      {task.project?.name && (
+                        <button
+                          onClick={() => onOpenProject && onOpenProject(task.projectId)}
+                          className="px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-600 hover:bg-purple-200"
+                        >
+                          📋 {task.project.name}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Overdue tasks warning */}
         {overdueTasks.length > 0 && isToday(selectedDate) && (
           <div className="bg-red-50 rounded-xl border border-red-200 overflow-hidden">
@@ -575,22 +639,23 @@ export default function CalendarView({ tasksData, onTasksLoaded, onOpenDossier, 
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Type de tâche</label>
-                <div className="flex gap-2">
-                  {['', 'Appel', 'Email', 'Autre'].map(type => (
+                <div className="flex gap-2 flex-wrap">
+                  {['', 'Appel', 'Email', 'WhatsApp', 'Autre'].map(type => (
                     <button
                       key={type}
                       type="button"
                       onClick={() => setEditTaskType(type)}
-                      className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                         editTaskType === type
                           ? type === 'Appel' ? 'bg-blue-500 text-white'
                             : type === 'Email' ? 'bg-amber-500 text-white'
+                            : type === 'WhatsApp' ? 'bg-emerald-500 text-white'
                             : type === 'Autre' ? 'bg-gray-600 text-white'
                             : 'bg-gray-200 text-gray-800'
                           : 'bg-gray-100 text-gray-600 hover:bg-gray-150'
                       }`}
                     >
-                      {type === '' ? 'Aucun' : type === 'Appel' ? '📞 Appel' : type === 'Email' ? '📧 Email' : '✅ Autre'}
+                      {type === '' ? 'Aucun' : type === 'Appel' ? '📞' : type === 'Email' ? '📧' : type === 'WhatsApp' ? '💬' : '✅'} {type || 'Aucun'}
                     </button>
                   ))}
                 </div>
