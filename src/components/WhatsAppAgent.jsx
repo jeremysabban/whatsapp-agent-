@@ -225,6 +225,14 @@ export default function WhatsAppAgent() {
   const [newGeminiUrl, setNewGeminiUrl] = useState('');
   const [activeStatusDropdown, setActiveStatusDropdown] = useState(null);
   const [isLinkingDossier, setIsLinkingDossier] = useState(false);
+  // Conv V2 states (lifted to parent to prevent reset on re-render)
+  const [v2SelectedConv, setV2SelectedConv] = useState(null);
+  const [v2Messages, setV2Messages] = useState([]);
+  const [v2SearchQuery, setV2SearchQuery] = useState('');
+  const [v2ActiveFilter, setV2ActiveFilter] = useState('all');
+  const [v2ShowArchived, setV2ShowArchived] = useState(false);
+  const [v2IsLoadingMessages, setV2IsLoadingMessages] = useState(false);
+  const [v2IsSending, setV2IsSending] = useState(false);
   const [dossierSearch, setDossierSearch] = useState('');
   const [dossierResults, setDossierResults] = useState([]);
   const [selectedDossier, setSelectedDossier] = useState(null);
@@ -675,7 +683,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
     es.onmessage = (event) => { try { const d = JSON.parse(event.data);
       if (d.type === 'status') { setConnected(d.data.status === 'connected'); setConnecting(d.data.status === 'connecting'); if (d.data.status === 'connected') { setQrImage(null); loadConversations(); } }
       else if (d.type === 'qr') fetchQR();
-      else if (d.type === 'message' || d.type === 'message_sent') { loadConversations(); if (selectedJidRef.current === d.data.jid) loadMessages(d.data.jid); }
+      else if (d.type === 'message' || d.type === 'message_sent') { loadConversations(); if (selectedJidRef.current === d.data.jid) loadMessages(d.data.jid); if (v2SelectedConv && d.data.jid === v2SelectedConv.jid) { fetch(`/api/whatsapp/messages/${encodeURIComponent(d.data.jid)}`).then(r => r.json()).then(data => setV2Messages(data.messages || [])).catch(() => {}); } }
       else if (d.type === 'document') { loadDocuments(); loadConversations(); }
       else if (d.type === 'labels_updated' || d.type === 'sync_progress' || d.type === 'sync_complete' || d.type === 'contacts_updated') { loadConversations(); loadDocuments(); }
     } catch {} };
@@ -1713,90 +1721,82 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
     </div>); };
 
   // ==================== CONVERSATIONS V2 (new layout) ====================
-  const ConversationsV2 = () => {
-    const [v2SelectedConv, setV2SelectedConv] = useState(null);
-    const [v2Messages, setV2Messages] = useState([]);
-    const [v2SearchQuery, setV2SearchQuery] = useState('');
-    const [v2ActiveFilter, setV2ActiveFilter] = useState('all');
-    const [v2ShowArchived, setV2ShowArchived] = useState(false);
-    const [v2IsLoadingMessages, setV2IsLoadingMessages] = useState(false);
-    const [v2IsSending, setV2IsSending] = useState(false);
+  // States are lifted to parent level to prevent reset on re-render
 
-    // Filter conversations
-    const v2Conversations = useMemo(() => {
-      if (v2ShowArchived) {
-        return conversations.filter(c => c.status === 'hsva');
-      }
-      return conversations.filter(c => c.status !== 'hsva');
-    }, [conversations, v2ShowArchived]);
+  // Filter conversations for V2
+  const v2Conversations = useMemo(() => {
+    if (v2ShowArchived) {
+      return conversations.filter(c => c.status === 'hsva');
+    }
+    return conversations.filter(c => c.status !== 'hsva');
+  }, [conversations, v2ShowArchived]);
 
-    // Load messages when conversation selected
-    const handleSelectConversation = useCallback(async (conv) => {
-      if (!conv) {
-        setV2SelectedConv(null);
-        setV2Messages([]);
-        return;
-      }
-      setV2SelectedConv(conv);
-      setV2IsLoadingMessages(true);
-      try {
-        const res = await fetch(`/api/whatsapp/messages/${encodeURIComponent(conv.jid)}`);
-        const data = await res.json();
-        setV2Messages(data.messages || []);
-      } catch (err) {
-        console.error('Error loading messages:', err);
-      }
-      setV2IsLoadingMessages(false);
-    }, []);
+  // Load messages when conversation selected (V2)
+  const handleV2SelectConversation = useCallback(async (conv) => {
+    if (!conv) {
+      setV2SelectedConv(null);
+      setV2Messages([]);
+      return;
+    }
+    setV2SelectedConv(conv);
+    setV2IsLoadingMessages(true);
+    try {
+      const res = await fetch(`/api/whatsapp/messages/${encodeURIComponent(conv.jid)}`);
+      const data = await res.json();
+      setV2Messages(data.messages || []);
+    } catch (err) {
+      console.error('Error loading messages:', err);
+    }
+    setV2IsLoadingMessages(false);
+  }, []);
 
-    // Send message
-    const handleSendMessage = useCallback(async (jid, text) => {
-      if (!text.trim() || v2IsSending) return;
-      setV2IsSending(true);
-      const optId = `opt_${Date.now()}`;
-      const optMsg = { id: optId, text, from_me: true, timestamp: Date.now() };
-      setV2Messages(prev => [...prev, optMsg]);
-      try {
-        await api('send', 'POST', { jid, text });
-        loadConversations();
-      } catch (err) {
-        setV2Messages(prev => prev.filter(m => m.id !== optId));
-        console.error('Send error:', err);
-      }
-      setV2IsSending(false);
-    }, [v2IsSending, loadConversations]);
+  // Send message (V2)
+  const handleV2SendMessage = useCallback(async (jid, text) => {
+    if (!text.trim() || v2IsSending) return;
+    setV2IsSending(true);
+    const optId = `opt_${Date.now()}`;
+    const optMsg = { id: optId, text, from_me: true, timestamp: Date.now() };
+    setV2Messages(prev => [...prev, optMsg]);
+    try {
+      await api('send', 'POST', { jid, text });
+      loadConversations();
+    } catch (err) {
+      setV2Messages(prev => prev.filter(m => m.id !== optId));
+      console.error('Send error:', err);
+    }
+    setV2IsSending(false);
+  }, [v2IsSending, loadConversations]);
 
-    // Update status
-    const handleUpdateStatus = useCallback(async (jid, status) => {
-      try {
-        await api('update-status', 'POST', { jid, status });
-        loadConversations();
-      } catch (err) {
-        console.error('Error updating status:', err);
-      }
-    }, [loadConversations]);
+  // Update status (V2)
+  const handleV2UpdateStatus = useCallback(async (jid, status) => {
+    try {
+      await api('update-status', 'POST', { jid, status });
+      loadConversations();
+    } catch (err) {
+      console.error('Error updating status:', err);
+    }
+  }, [loadConversations]);
 
-    return (
-      <div className="h-[calc(100vh-8rem)] -m-4 lg:-m-6">
-        <ConversationLayout
-          conversations={v2Conversations}
-          selectedConversation={v2SelectedConv}
-          selectedMessages={v2Messages}
-          isLoadingConversations={conversations.length === 0 && !connected}
-          isLoadingMessages={v2IsLoadingMessages}
-          isConnected={connected}
-          onSelectConversation={handleSelectConversation}
-          onSendMessage={handleSendMessage}
-          searchQuery={v2SearchQuery}
-          onSearchChange={setV2SearchQuery}
-          activeFilter={v2ActiveFilter}
-          onFilterChange={setV2ActiveFilter}
-          isSending={v2IsSending}
-          onUpdateStatus={handleUpdateStatus}
-        />
-      </div>
-    );
-  };
+  const ConversationsV2 = () => (
+    <div className="h-[calc(100vh-8rem)] -m-4 lg:-m-6">
+      <ConversationLayout
+        conversations={v2Conversations}
+        selectedConversation={v2SelectedConv}
+        selectedMessages={v2Messages}
+        isLoadingConversations={conversations.length === 0 && !connected}
+        isLoadingMessages={v2IsLoadingMessages}
+        isConnected={connected}
+        onSelectConversation={handleV2SelectConversation}
+        onSendMessage={handleV2SendMessage}
+        searchQuery={v2SearchQuery}
+        onSearchChange={setV2SearchQuery}
+        activeFilter={v2ActiveFilter}
+        onFilterChange={setV2ActiveFilter}
+        isSending={v2IsSending}
+        onUpdateStatus={handleV2UpdateStatus}
+      />
+    </div>
+  );
 
   // ==================== DETAIL (2-column layout) ====================
   const Detail = () => {

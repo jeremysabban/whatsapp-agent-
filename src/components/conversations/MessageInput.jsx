@@ -94,7 +94,29 @@ export default function MessageInput({
   placeholder = 'Tapez un message'
 }) {
   const [text, setText] = useState('');
+  const [isImproving, setIsImproving] = useState(false);
   const textareaRef = useRef(null);
+
+  // AI Text Improvement
+  const handleImprove = async () => {
+    if (!text.trim() || isImproving) return;
+    setIsImproving(true);
+    try {
+      const res = await fetch('/api/ai/improve-text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, context: 'message WhatsApp professionnel mais cordial' })
+      });
+      const data = await res.json();
+      if (data.improved) {
+        setText(data.improved);
+      }
+    } catch (err) {
+      console.error('Error improving text:', err);
+    }
+    setIsImproving(false);
+    textareaRef.current?.focus();
+  };
 
   // Auto-resize textarea
   const adjustHeight = useCallback(() => {
@@ -181,8 +203,34 @@ export default function MessageInput({
           />
         </div>
 
-        {/* Right button - Send or Mic */}
-        <div className="flex items-center">
+        {/* Right buttons - AI + Send or Mic */}
+        <div className="flex items-center gap-1">
+          {/* AI Improve button - only when there's text */}
+          {hasText && (
+            <button
+              type="button"
+              onClick={(e) => { e.preventDefault(); handleImprove(); }}
+              onMouseDown={(e) => e.preventDefault()}
+              disabled={isImproving || disabled}
+              className={`p-2 rounded-full transition-all ${
+                isImproving
+                  ? 'bg-amber-300 text-amber-700'
+                  : 'bg-amber-100 hover:bg-amber-200 text-amber-700'
+              }`}
+              title="Améliorer avec l'IA"
+            >
+              {isImproving ? (
+                <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
+              ) : (
+                <span className="text-base">✨</span>
+              )}
+            </button>
+          )}
+
+          {/* Send or Mic button */}
           {hasText ? (
             <SendButton onClick={handleSend} disabled={isSending || disabled} />
           ) : (
