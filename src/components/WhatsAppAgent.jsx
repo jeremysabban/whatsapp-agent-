@@ -8,6 +8,7 @@ import TasksView from './TasksView';
 import ProjectsView from './ProjectsView';
 import DossierChat from './DossierChat';
 import CalendarView from './CalendarView';
+import { ConversationLayout } from './conversations';
 
 // ==================== CONSTANTS ====================
 const STATUSES = {
@@ -1064,6 +1065,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       { id: 'dashboard', icon: 'dashboard', label: 'Dashboard' },
       { id: 'kanban', icon: 'kanban', label: 'Pipeline' },
       { id: 'conversations', icon: 'message', label: 'Conversations', badge: (labelStats.client||0)+(labelStats.assurance||0)+(labelStats.prospect||0) },
+      { id: 'conversations2', icon: 'message', label: 'Conv. V2' },
       { id: 'dossiers', icon: 'folder', label: 'Dossiers' },
       { id: 'contacts', icon: 'user', label: 'Contacts' },
       { id: 'tasks', icon: 'tasks', label: 'Tâches' },
@@ -1709,6 +1711,92 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-50">{filtered.map(c => <ConversationRow key={c.jid} conv={c} onClick={() => openConversation(c)} />)}{filtered.length === 0 && <div className="p-8 text-center text-gray-400 text-sm">{conversations.length===0?(connected?'Aucune conv avec cette étiquette':'Connecte WhatsApp'):'Aucun résultat'}</div>}</div>
       <button onClick={() => { setShowArchived(!showArchived); setActiveLabel('tous'); }} className={`w-full py-2.5 text-sm font-medium rounded-xl border transition-colors ${showArchived ? 'bg-gray-900 text-white border-gray-900 hover:bg-gray-800' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}>{showArchived ? '← Retour aux actifs' : `Voir archives HSVA (${archivedConvs.length})`}</button>
     </div>); };
+
+  // ==================== CONVERSATIONS V2 (new layout) ====================
+  const ConversationsV2 = () => {
+    const [v2SelectedConv, setV2SelectedConv] = useState(null);
+    const [v2Messages, setV2Messages] = useState([]);
+    const [v2SearchQuery, setV2SearchQuery] = useState('');
+    const [v2ActiveFilter, setV2ActiveFilter] = useState('all');
+    const [v2ShowArchived, setV2ShowArchived] = useState(false);
+    const [v2IsLoadingMessages, setV2IsLoadingMessages] = useState(false);
+    const [v2IsSending, setV2IsSending] = useState(false);
+
+    // Filter conversations
+    const v2Conversations = useMemo(() => {
+      if (v2ShowArchived) {
+        return conversations.filter(c => c.status === 'hsva');
+      }
+      return conversations.filter(c => c.status !== 'hsva');
+    }, [conversations, v2ShowArchived]);
+
+    // Load messages when conversation selected
+    const handleSelectConversation = useCallback(async (conv) => {
+      if (!conv) {
+        setV2SelectedConv(null);
+        setV2Messages([]);
+        return;
+      }
+      setV2SelectedConv(conv);
+      setV2IsLoadingMessages(true);
+      try {
+        const res = await fetch(`/api/whatsapp/messages/${encodeURIComponent(conv.jid)}`);
+        const data = await res.json();
+        setV2Messages(data.messages || []);
+      } catch (err) {
+        console.error('Error loading messages:', err);
+      }
+      setV2IsLoadingMessages(false);
+    }, []);
+
+    // Send message
+    const handleSendMessage = useCallback(async (jid, text) => {
+      if (!text.trim() || v2IsSending) return;
+      setV2IsSending(true);
+      const optId = `opt_${Date.now()}`;
+      const optMsg = { id: optId, text, from_me: true, timestamp: Date.now() };
+      setV2Messages(prev => [...prev, optMsg]);
+      try {
+        await api('send', 'POST', { jid, text });
+        loadConversations();
+      } catch (err) {
+        setV2Messages(prev => prev.filter(m => m.id !== optId));
+        console.error('Send error:', err);
+      }
+      setV2IsSending(false);
+    }, [v2IsSending, loadConversations]);
+
+    // Update status
+    const handleUpdateStatus = useCallback(async (jid, status) => {
+      try {
+        await api('update-status', 'POST', { jid, status });
+        loadConversations();
+      } catch (err) {
+        console.error('Error updating status:', err);
+      }
+    }, [loadConversations]);
+
+    return (
+      <div className="h-[calc(100vh-8rem)] -m-4 lg:-m-6">
+        <ConversationLayout
+          conversations={v2Conversations}
+          selectedConversation={v2SelectedConv}
+          selectedMessages={v2Messages}
+          isLoadingConversations={conversations.length === 0 && !connected}
+          isLoadingMessages={v2IsLoadingMessages}
+          isConnected={connected}
+          onSelectConversation={handleSelectConversation}
+          onSendMessage={handleSendMessage}
+          searchQuery={v2SearchQuery}
+          onSearchChange={setV2SearchQuery}
+          activeFilter={v2ActiveFilter}
+          onFilterChange={setV2ActiveFilter}
+          isSending={v2IsSending}
+          onUpdateStatus={handleUpdateStatus}
+        />
+      </div>
+    );
+  };
 
   // ==================== DETAIL (2-column layout) ====================
   const Detail = () => {
@@ -3919,6 +4007,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       case 'dashboard': return <Dashboard />;
       case 'kanban': return <Kanban />;
       case 'conversations': return <ConversationsList />;
+      case 'conversations2': return <ConversationsV2 />;
       case 'dossiers': return <DossierList
         onSelectDossier={handleSelectDossier}
         highlightedDossierId={highlightedDossierId}
