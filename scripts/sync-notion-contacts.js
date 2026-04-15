@@ -1,10 +1,16 @@
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env.local') });
 const { Client } = require('@notionhq/client');
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const NOTION_API_KEY = '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';
-const CONTACTS_DB_ID = 'c812f778-cd65-413f-8feb-5cbc4fbb5dd8';
-const DOSSIERS_DB_ID = '8f32e57f-ff6a-4d26-b5ab-502142e8f8d6';
+const NOTION_API_KEY = process.env.NOTION_API_KEY || process.env.NOTION_KEY;
+const CONTACTS_DB_ID = process.env.NOTION_CONTACTS_DB_ID || 'c812f778-cd65-413f-8feb-5cbc4fbb5dd8';
+const DOSSIERS_DB_ID = process.env.NOTION_DOSSIERS_DB_ID || '8f32e57f-ff6a-4d26-b5ab-502142e8f8d6';
+
+if (!NOTION_API_KEY) {
+  console.error('❌ NOTION_API_KEY manquant dans .env.local');
+  process.exit(1);
+}
 
 const notion = new Client({ auth: NOTION_API_KEY });
 const db = new Database(path.join(__dirname, '..', 'data', 'whatsapp-agent.db'));
