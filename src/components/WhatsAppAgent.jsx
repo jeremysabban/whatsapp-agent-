@@ -9,6 +9,20 @@ import ProjectsView from './ProjectsView';
 import DossierChat from './DossierChat';
 import CalendarView from './CalendarView';
 import { ConversationLayout } from './conversations';
+import ProjectModal from './conversations/ProjectModal';
+import PipelineView from './PipelineView';
+import TaskFormModal from './shared/TaskFormModal';
+import ProjectDetailPanel from './shared/ProjectDetailPanel';
+import DossierDetailPanel from './shared/DossierDetailPanel';
+import TaskDetailPanel from './shared/TaskDetailPanel';
+import ContractDetailPanel from './shared/ContractDetailPanel';
+import ContractFormModal from './shared/ContractFormModal';
+import ContratsView from './ContratsView';
+import CommissionsView from './CommissionsView';
+import FinanceView from './FinanceView';
+import DashboardView from './DashboardView';
+import EmailsView from './EmailsView';
+import DriveExplorer from './shared/DriveExplorer';
 
 // ==================== CONSTANTS ====================
 const STATUSES = {
@@ -73,6 +87,7 @@ function Icon({ name, className = 'w-4 h-4' }) {
     external: <><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></>,
     plus: <><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></>,
     calendar: <><rect width="18" height="18" x="3" y="4" rx="2" ry="2" /><line x1="16" x2="16" y1="2" y2="6" /><line x1="8" x2="8" y1="2" y2="6" /><line x1="3" x2="21" y1="10" y2="10" /></>,
+    mail: <><rect width="20" height="16" x="2" y="4" rx="2" /><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" /></>,
   };
   return (<svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">{icons[name]}</svg>);
 }
@@ -227,12 +242,19 @@ export default function WhatsAppAgent() {
   const [isLinkingDossier, setIsLinkingDossier] = useState(false);
   // Conv V2 states (lifted to parent to prevent reset on re-render)
   const [v2SelectedConv, setV2SelectedConv] = useState(null);
+  const v2SelectedConvRef = useRef(null);
+  v2SelectedConvRef.current = v2SelectedConv; // sync ref without useEffect
   const [v2Messages, setV2Messages] = useState([]);
   const [v2SearchQuery, setV2SearchQuery] = useState('');
   const [v2ActiveFilter, setV2ActiveFilter] = useState('all');
   const [v2ShowArchived, setV2ShowArchived] = useState(false);
   const [v2IsLoadingMessages, setV2IsLoadingMessages] = useState(false);
   const [v2IsSending, setV2IsSending] = useState(false);
+  const [showV2TaskModal, setShowV2TaskModal] = useState(false);
+  const [emailTaskModal, setEmailTaskModal] = useState(null); // { name, comment, projectId, dossierId, dossierName, messageId }
+  const [dashboardTaskModal, setDashboardTaskModal] = useState(null); // { projectId, projectName, dossierId, dossierName }
+  const [entityPanel, setEntityPanel] = useState(null); // { type: 'project'|'task'|'dossier'|'contract'|'contact', id }
+  const [contractModal, setContractModal] = useState(null); // { dossierId, dossierName, projectId, compagnieId, compagnieName, souscripteurId }
   const [dossierSearch, setDossierSearch] = useState('');
   const [dossierResults, setDossierResults] = useState([]);
   const [selectedDossier, setSelectedDossier] = useState(null);
@@ -1072,16 +1094,20 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
     <nav className="flex-1 p-3 space-y-1">{[
       { id: 'dashboard', icon: 'dashboard', label: 'Dashboard' },
       { id: 'kanban', icon: 'kanban', label: 'Pipeline' },
-      { id: 'conversations', icon: 'message', label: 'Conversations', badge: (labelStats.client||0)+(labelStats.assurance||0)+(labelStats.prospect||0) },
-      { id: 'conversations2', icon: 'message', label: 'Conv. V2' },
+      { id: 'conversations2', icon: 'message', label: 'WhatsApp', badge: (labelStats.client||0)+(labelStats.assurance||0)+(labelStats.prospect||0) },
       { id: 'dossiers', icon: 'folder', label: 'Dossiers' },
       { id: 'contacts', icon: 'user', label: 'Contacts' },
       { id: 'tasks', icon: 'tasks', label: 'Tâches' },
       { id: 'projects', icon: 'project', label: 'Projets' },
       { id: 'calendar', icon: 'calendar', label: 'Calendrier' },
       { id: 'documents', icon: 'file', label: 'Documents', badge: stats.pending_docs || 0 },
+      { id: 'emails', icon: 'mail', label: 'Emails' },
+      { id: 'drive', icon: 'drive', label: 'Drive' },
       { id: 'stats', icon: 'trendUp', label: 'Statistiques' },
       { id: 'analytics', icon: 'chart', label: 'Analytics' },
+      { id: 'contrats', icon: 'file', label: 'Contrats' },
+      { id: 'finance', icon: 'trendUp', label: 'Finance' },
+      { id: 'commissions', icon: 'trendUp', label: 'Commissions' },
       { id: 'codes', icon: 'key', label: 'Codes Courtage' },
       { id: 'settings', icon: 'settings', label: 'Paramètres' },
     ].map((item) => (<button key={item.id} onClick={() => { setView(item.id); setSidebarOpen(false); if (item.id !== 'detail' && item.id !== 'dossierDetail') { setSelectedJid(null); setSelectedDossier(null); window.history.pushState({}, '', '/'); } }}
@@ -1725,13 +1751,32 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
 
   // Filter conversations for V2
   const v2Conversations = useMemo(() => {
-    if (v2ShowArchived) {
-      return conversations.filter(c => c.status === 'hsva');
+    let result = v2ShowArchived
+      ? conversations.filter(c => c.status === 'hsva')
+      : conversations.filter(c => c.status !== 'hsva');
+
+    // Auto-hide LID duplicates: if a @lid conversation has a linked_jid pointing to a @s.whatsapp.net, hide the LID
+    // Also hide conversations whose linked_jid exists (they're duplicates)
+    const linkedJids = new Set(result.filter(c => c.linked_jid).map(c => c.jid));
+    // Auto-detect: hide @lid convs when a @s.whatsapp.net conv shares the same notion_dossier_id
+    const dossierToClassicJid = {};
+    for (const c of result) {
+      if (c.notion_dossier_id && c.jid.includes('@s.whatsapp.net')) {
+        dossierToClassicJid[c.notion_dossier_id] = c.jid;
+      }
     }
-    return conversations.filter(c => c.status !== 'hsva');
+    result = result.filter(c => {
+      // Hide if explicitly linked as duplicate
+      if (c.linked_jid) return false;
+      // Hide @lid if a classic jid shares the same dossier
+      if (c.jid.includes('@lid') && c.notion_dossier_id && dossierToClassicJid[c.notion_dossier_id]) return false;
+      return true;
+    });
+
+    return result;
   }, [conversations, v2ShowArchived]);
 
-  // Load messages when conversation selected (V2)
+  // Load messages when conversation selected (V2) — merges LID/classic messages
   const handleV2SelectConversation = useCallback(async (conv) => {
     if (!conv) {
       setV2SelectedConv(null);
@@ -1740,49 +1785,116 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
     }
     setV2SelectedConv(conv);
     setV2IsLoadingMessages(true);
+    if (conv.notion_dossier_id) loadDossierDetails(conv.notion_dossier_id);
+    else setDossierDetails(null);
     try {
-      const res = await fetch(`/api/whatsapp/messages/${encodeURIComponent(conv.jid)}`);
-      const data = await res.json();
-      setV2Messages(data.messages || []);
+      // Find all jids to load (linked + same dossier LIDs)
+      const jidsToLoad = [conv.jid];
+      if (conv.linked_jid) jidsToLoad.push(conv.linked_jid);
+      // Find LID or classic counterpart with same dossier
+      if (conv.notion_dossier_id) {
+        const linkedConvs = conversations.filter(c =>
+          c.notion_dossier_id === conv.notion_dossier_id && c.jid !== conv.jid && !jidsToLoad.includes(c.jid)
+        );
+        linkedConvs.forEach(c => jidsToLoad.push(c.jid));
+      }
+
+      // Load and merge messages from all jids
+      const allMessages = [];
+      for (const jid of jidsToLoad) {
+        const res = await fetch(`/api/whatsapp/messages/${encodeURIComponent(jid)}`);
+        const data = await res.json();
+        allMessages.push(...(data.messages || []));
+      }
+      // Dedupe by message id and sort chronologically
+      const seen = new Set();
+      const deduped = allMessages.filter(m => {
+        if (seen.has(m.id)) return false;
+        seen.add(m.id);
+        return true;
+      });
+      deduped.sort((a, b) => a.timestamp - b.timestamp);
+      setV2Messages(deduped);
     } catch (err) {
       console.error('Error loading messages:', err);
     }
     setV2IsLoadingMessages(false);
-  }, []);
+  }, [conversations]);
 
-  // Send message (V2)
+  // Send message (V2) — prefer @s.whatsapp.net over @lid for sending
   const handleV2SendMessage = useCallback(async (jid, text) => {
     if (!text.trim() || v2IsSending) return;
     setV2IsSending(true);
+
+    // Prefer classic jid (@s.whatsapp.net) for sending, not LID
+    let sendJid = jid;
+    if (sendJid.includes('@lid')) {
+      const conv = conversations.find(c => c.jid === sendJid);
+      if (conv) {
+        // Check linked_jid
+        if (conv.linked_jid && conv.linked_jid.includes('@s.whatsapp.net')) {
+          sendJid = conv.linked_jid;
+        } else if (conv.notion_dossier_id) {
+          // Find classic jid with same dossier
+          const classicConv = conversations.find(c =>
+            c.jid.includes('@s.whatsapp.net') && c.notion_dossier_id === conv.notion_dossier_id
+          );
+          if (classicConv) sendJid = classicConv.jid;
+        }
+      }
+    }
+
     const optId = `opt_${Date.now()}`;
     const optMsg = { id: optId, text, from_me: true, timestamp: Date.now() };
     setV2Messages(prev => [...prev, optMsg]);
     try {
-      await api('send', 'POST', { jid, text });
+      await api('send', 'POST', { jid: sendJid, text });
       loadConversations();
     } catch (err) {
       setV2Messages(prev => prev.filter(m => m.id !== optId));
       console.error('Send error:', err);
     }
     setV2IsSending(false);
-  }, [v2IsSending, loadConversations]);
+  }, [v2IsSending, loadConversations, conversations]);
 
-  // Update status (V2)
-  const handleV2UpdateStatus = useCallback(async (jid, status) => {
+  // Update status (V2) — accepte 1 ou 2 args (ChatHeader passe 1 seul)
+  const handleV2UpdateStatus = useCallback(async (statusOrJid, maybeStatus) => {
     try {
+      let jid, status;
+      if (maybeStatus === undefined) {
+        jid = v2SelectedConvRef.current?.jid;
+        status = statusOrJid;
+      } else {
+        jid = statusOrJid;
+        status = maybeStatus;
+      }
+      if (!jid || !status) return;
       await api('update-status', 'POST', { jid, status });
+      setV2SelectedConv(prev => prev?.jid === jid ? { ...prev, status } : prev);
       loadConversations();
     } catch (err) {
       console.error('Error updating status:', err);
     }
   }, [loadConversations]);
 
+  // Link/unlink conversations (dedup)
+  const handleLinkConversation = useCallback(async (sourceJid, targetJid) => {
+    await api('link-conversation', 'POST', { sourceJid, targetJid });
+    loadConversations();
+  }, [loadConversations]);
+
+  const handleUnlinkConversation = useCallback(async (sourceJid) => {
+    await api('link-conversation', 'POST', { sourceJid, action: 'unlink' });
+    loadConversations();
+  }, [loadConversations]);
+
   const ConversationsV2 = () => (
-    <div className="h-[calc(100vh-8rem)] -m-4 lg:-m-6">
+    <div className="h-full">
       <ConversationLayout
         conversations={v2Conversations}
         selectedConversation={v2SelectedConv}
         selectedMessages={v2Messages}
+        dossierDetails={dossierDetails}
         isLoadingConversations={conversations.length === 0 && !connected}
         isLoadingMessages={v2IsLoadingMessages}
         isConnected={connected}
@@ -1794,7 +1906,21 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
         onFilterChange={setV2ActiveFilter}
         isSending={v2IsSending}
         onUpdateStatus={handleV2UpdateStatus}
+        onLinkConversation={handleLinkConversation}
+        onUnlinkConversation={handleUnlinkConversation}
+        onAddTask={() => setShowV2TaskModal(true)}
+        onAddProject={() => window.dispatchEvent(new Event('open-project-modal'))}
+        onLinkProject={() => window.dispatchEvent(new Event('open-link-project-modal'))}
       />
+      {showV2TaskModal && (
+        <TaskFormModal
+          isOpen={showV2TaskModal}
+          onClose={() => setShowV2TaskModal(false)}
+          onSuccess={() => { setShowV2TaskModal(false); }}
+          defaultDossierId={v2SelectedConv?.notion_dossier_id}
+          defaultDossierName={v2SelectedConv?.notion_dossier_name}
+        />
+      )}
     </div>
   );
 
@@ -3702,6 +3828,30 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       </div>
     </div>
 
+    {/* Vider le cache navigateur */}
+    <div className="bg-white rounded-xl border border-blue-200 p-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center"><span className="text-lg">🧹</span></div>
+          <div>
+            <h3 className="font-semibold text-gray-900">Vider le cache</h3>
+            <p className="text-sm text-gray-500">Force le rechargement complet de l'application (CSS, JS, pages)</p>
+          </div>
+        </div>
+        <button onClick={async () => {
+          if ('caches' in window) {
+            const names = await caches.keys();
+            await Promise.all(names.map(n => caches.delete(n)));
+          }
+          if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map(r => r.unregister()));
+          }
+          window.location.reload(true);
+        }} className="px-4 py-2 bg-blue-50 text-blue-700 border border-blue-300 rounded-lg hover:bg-blue-100 transition-colors flex items-center gap-2 text-sm font-medium">🧹 Vider & Recharger</button>
+      </div>
+    </div>
+
     {/* Journal Agent Section */}
     <div className="bg-white rounded-xl border border-gray-200">
       <button onClick={() => setShowJournal(!showJournal)} className="w-full p-4 flex items-center justify-between hover:bg-gray-50">
@@ -4004,8 +4154,19 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       );
     }
     switch(view) {
-      case 'dashboard': return <Dashboard />;
-      case 'kanban': return <Kanban />;
+      case 'dashboard': return <DashboardView
+  conversations={conversations}
+  onNavigate={(view, params) => { setView(view); }}
+  onOpenConversation={(jid) => { setSelectedJid(jid); setView('detail'); }}
+  onOpenTask={(task) => setEntityPanel({ type: 'task', id: task.id })}
+  onOpenProject={(projectId) => setEntityPanel({ type: 'project', id: projectId })}
+  onCreateProject={(type) => {
+    setProjectForm({ name: '', type: type, priority: 'À prioriser', niveau: '', contratId: null });
+    setShowCreateOpp(true);
+  }}
+  onCreateTask={(info) => setDashboardTaskModal(info)}
+/>;
+      case 'kanban': return <PipelineView onOpenConversation={(jid) => { setSelectedJid(jid); setView('detail'); }} conversations={conversations} onOpenEntity={(type, id) => setEntityPanel({ type, id })} onCreateContract={(opts) => setContractModal(opts || {})} />;
       case 'conversations': return <ConversationsList />;
       case 'conversations2': return <ConversationsV2 />;
       case 'dossiers': return <DossierList
@@ -4016,7 +4177,8 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       case 'contacts': return <ContactsView />;
       case 'tasks': return <TasksView
         onOpenConversation={handleOpenConversationFromDossier}
-        onOpenProject={(projectId) => { setHighlightedProjectId(projectId); setView('projects'); }}
+        onOpenProject={(projectId) => setEntityPanel({ type: 'project', id: projectId })}
+        onOpenDossier={(dossierId) => setEntityPanel({ type: 'dossier', id: dossierId })}
         tasksData={tasksData}
         tasksLastUpdate={tasksLastUpdate}
         tasksHasLoaded={tasksHasLoaded}
@@ -4032,21 +4194,33 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       case 'calendar': return <CalendarView
         tasksData={tasksData}
         onTasksLoaded={(data) => { setTasksData(data); setTasksLastUpdate(new Date()); setTasksHasLoaded(true); }}
-        onOpenDossier={(dossierId) => {
-          // Navigate to dossiers view and highlight the dossier
-          setView('dossiers');
-          setHighlightedDossierId(dossierId);
-        }}
+        onOpenDossier={(dossierId) => setEntityPanel({ type: 'dossier', id: dossierId })}
         onOpenProject={(projectId) => {
-          // Navigate to projects view and highlight the project
-          setView('projects');
-          setHighlightedProjectId(projectId);
+          setEntityPanel({ type: 'project', id: projectId });
         }}
       />;
       case 'documents': return <DocumentsView />;
+      case 'emails': return <EmailsView
+        onOpenProject={(projectId) => setEntityPanel({ type: 'project', id: projectId })}
+        onOpenDossier={(dossierId) => setEntityPanel({ type: 'dossier', id: dossierId })}
+        onCreateProject={(type) => {
+          setProjectForm({ name: '', type: type, priority: 'À prioriser', niveau: '', contratId: null });
+          setShowCreateOpp(true);
+        }}
+        onCreateTask={(emailData) => setEmailTaskModal(emailData)}
+      />;
+      case 'drive': return <DriveExplorer
+        driveUrl="https://drive.google.com/drive/folders/1co4mv9J4ZpqdoVypCA5tZUnndj6JQhXN"
+        folderName="Dossier Clients"
+        compact={false}
+        maxHeight="calc(100vh - 200px)"
+      />;
       case 'journal': return <JournalView />;
       case 'stats': return <SalesStats />;
       case 'analytics': return <Analytics />;
+      case 'contrats': return <ContratsView onOpenEntity={(type, id) => setEntityPanel({ type, id })} onCreateContract={(opts) => setContractModal(opts || {})} />;
+      case 'finance': return <FinanceView />;
+      case 'commissions': return <CommissionsView onOpenEntity={(type, id) => setEntityPanel({ type, id })} onCreateContract={(opts) => setContractModal(opts || {})} />;
       case 'codes': return <CodesView />;
       case 'settings': return <Settings />;
       default: return <Dashboard />;
@@ -4058,13 +4232,41 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
     {sidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />}
     <div className="flex-1 flex flex-col min-w-0">
       <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3 lg:hidden"><button onClick={() => setSidebarOpen(true)} className="p-2 hover:bg-gray-100 rounded-lg"><Icon name="menu" className="w-5 h-5 text-gray-600" /></button><div className="flex items-center gap-2"><div className="w-7 h-7 rounded-lg bg-emerald-500 flex items-center justify-center"><Icon name="message" className="w-4 h-4 text-white" /></div><span className="font-bold text-sm">WA Agent</span></div><div className={`ml-auto flex items-center gap-1.5 text-xs ${connected?'text-emerald-600':'text-red-500'}`}><div className={`w-2 h-2 rounded-full ${connected?'bg-emerald-500 animate-pulse':'bg-red-500'}`} />{connected?'Connecté':'Déconnecté'}</div></div>
-      <div className="flex-1 overflow-y-auto p-4 lg:p-6">{renderView()}</div>
+      <div className={`flex-1 ${view === 'conversations2' ? 'overflow-hidden' : 'overflow-y-auto p-4 lg:p-6'}`}>{renderView()}</div>
     </div>
     {previewDoc && (<div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={() => setPreviewDoc(null)}><div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-gray-50"><div className="flex items-center gap-3 min-w-0"><div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${previewDoc.mimetype?.includes('pdf')?'bg-red-100':'bg-blue-100'}`}><span className={`text-xs font-bold ${previewDoc.mimetype?.includes('pdf')?'text-red-500':'text-blue-500'}`}>{previewDoc.mimetype?.includes('pdf')?'PDF':'DOC'}</span></div><p className="text-sm font-medium text-gray-900 truncate">{previewDoc.filename}</p></div>
       <div className="flex items-center gap-2 flex-shrink-0"><a href={previewDoc.url} download={previewDoc.filename} className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 flex items-center gap-1.5"><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>Télécharger</a><a href={previewDoc.url} target="_blank" rel="noopener" className="px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50">Ouvrir ↗</a><button onClick={() => setPreviewDoc(null)} className="p-1.5 hover:bg-gray-200 rounded-lg"><svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button></div></div>
       <div className="flex-1 overflow-hidden bg-gray-100" style={{minHeight:'60vh'}}>{previewDoc.mimetype?.includes('pdf') ? <iframe src={previewDoc.url} className="w-full h-full border-0" style={{minHeight:'60vh'}} title={previewDoc.filename} /> : previewDoc.mimetype?.startsWith('image/') ? <div className="w-full h-full flex items-center justify-center p-4"><img src={previewDoc.url} alt={previewDoc.filename} className="max-w-full max-h-full object-contain" /></div> : <div className="w-full h-full flex items-center justify-center"><div className="text-center p-8"><Icon name="file" className="w-16 h-16 text-gray-300 mx-auto" /><p className="text-gray-500 mt-3">Aperçu non disponible</p><a href={previewDoc.url} download={previewDoc.filename} className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>Télécharger</a></div></div>}</div>
     </div></div>)}
+
+    {/* Email → Task Modal */}
+    {emailTaskModal && (
+      <TaskFormModal
+        isOpen={!!emailTaskModal}
+        onClose={() => setEmailTaskModal(null)}
+        onSuccess={() => setEmailTaskModal(null)}
+        mode="create"
+        defaultProjectId={emailTaskModal.projectId}
+        defaultDossierId={emailTaskModal.dossierId}
+        defaultDossierName={emailTaskModal.dossierName}
+        defaultTitle={emailTaskModal.name}
+        defaultComment={emailTaskModal.comment}
+      />
+    )}
+
+    {/* Dashboard → Task Modal */}
+    {dashboardTaskModal && (
+      <TaskFormModal
+        isOpen={!!dashboardTaskModal}
+        onClose={() => setDashboardTaskModal(null)}
+        onSuccess={() => setDashboardTaskModal(null)}
+        mode="create"
+        defaultProjectId={dashboardTaskModal.projectId}
+        defaultDossierId={dashboardTaskModal.dossierId}
+        defaultDossierName={dashboardTaskModal.dossierName}
+      />
+    )}
 
     {/* Tag → Project Linking Modal */}
     {tagProjectModal && (() => {
@@ -4277,7 +4479,8 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
       </div>
     )}
 
-    {/* Floating Brain Mic Button */}
+    {/* Floating Brain Mic Button - hidden on conversations2 */}
+    {view !== 'conversations2' && (
     <button
       onClick={isRecording ? stopRecording : startRecording}
       disabled={brainProcessing}
@@ -4292,8 +4495,9 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
         <svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1 1.93c-3.94-.49-7-3.85-7-7.93h2c0 2.76 2.24 5 5 5s5-2.24 5-5h2c0 4.08-3.06 7.44-7 7.93V19h4v2H8v-2h4v-3.07z"/></svg>
       )}
     </button>
-    {/* Brain Result Toast (Global) */}
-    {brainResult && !selectedJid && (
+    )}
+    {/* Brain Result Toast (Global) - hidden on conversations2 */}
+    {view !== 'conversations2' && brainResult && !selectedJid && (
       <div className={`fixed bottom-24 right-6 z-40 max-w-xs p-4 rounded-xl shadow-lg ${brainResult.error ? 'bg-red-500 text-white' : 'bg-emerald-500 text-white'}`}>
         {brainResult.message || brainResult.error || 'Action effectuée'}
       </div>
@@ -4394,6 +4598,160 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
             dossierNom={activeDossierChat.nom}
             onClose={() => setActiveDossierChat(null)}
           />
+        </div>
+      </div>
+    )}
+
+    {/* Entity Detail Panels (global slide-overs) */}
+    {entityPanel?.type === 'project' && (
+      <ProjectDetailPanel
+        projectId={entityPanel.id}
+        onClose={() => setEntityPanel(null)}
+        onOpenDossier={(dossierId) => setEntityPanel({ type: 'dossier', id: dossierId })}
+        onOpenTask={(taskId) => setEntityPanel({ type: 'task', id: taskId })}
+        onTaskUpdated={() => loadTasks()}
+        onOpenConversation={(jid) => { setSelectedJid(jid); setView('detail'); setEntityPanel(null); }}
+        onCreateContract={(opts) => setContractModal(opts || {})}
+        conversations={conversations}
+      />
+    )}
+    {entityPanel?.type === 'dossier' && (
+      <DossierDetailPanel
+        dossierId={entityPanel.id}
+        onClose={() => setEntityPanel(null)}
+        onOpenProject={(projectId) => setEntityPanel({ type: 'project', id: projectId })}
+        onOpenTask={(taskId) => setEntityPanel({ type: 'task', id: taskId })}
+        onOpenEntity={(type, id) => setEntityPanel({ type, id })}
+        onOpenConversation={(jid) => { setSelectedJid(jid); setView('detail'); setEntityPanel(null); }}
+        onCreateContract={(opts) => setContractModal(opts || {})}
+        conversations={conversations}
+      />
+    )}
+    {entityPanel?.type === 'task' && (
+      <TaskDetailPanel
+        taskId={entityPanel.id}
+        onClose={() => setEntityPanel(null)}
+        onOpenProject={(projectId) => setEntityPanel({ type: 'project', id: projectId })}
+        onOpenDossier={(dossierId) => setEntityPanel({ type: 'dossier', id: dossierId })}
+        onOpenTask={(taskId) => setEntityPanel({ type: 'task', id: taskId })}
+        onTaskUpdated={() => loadTasks()}
+      />
+    )}
+    {entityPanel?.type === 'contract' && (
+      <ContractDetailPanel
+        contractId={entityPanel.id}
+        onClose={() => setEntityPanel(null)}
+        onOpenDossier={(id) => setEntityPanel({ type: 'dossier', id })}
+      />
+    )}
+    {/* Contract creation modal */}
+    {contractModal && (
+      <ContractFormModal
+        isOpen={!!contractModal}
+        onClose={() => setContractModal(null)}
+        onSuccess={() => { setContractModal(null); window.dispatchEvent(new Event('contract-created')); }}
+        defaultDossierId={contractModal.dossierId || ''}
+        defaultDossierName={contractModal.dossierName || ''}
+        defaultProjectId={contractModal.projectId || ''}
+        defaultCompagnieId={contractModal.compagnieId || ''}
+        defaultCompagnieName={contractModal.compagnieName || ''}
+        defaultSouscripteurId={contractModal.souscripteurId || ''}
+      />
+    )}
+    {/* ─── Modal global création projet (fonctionne depuis Dashboard) ─── */}
+    {showCreateOpp && !selectedJid && (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold text-gray-800">
+              {projectForm.type === 'Lead' ? '🩷 Nouveau Lead' :
+               projectForm.type === 'Gestion' ? '🟢 Nouvelle Gestion' :
+               '🔵 Nouveau Sinistre'}
+            </h3>
+            <button onClick={() => setShowCreateOpp(false)} className="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+          </div>
+
+          <input type="text" placeholder="Nom du projet..." value={projectForm.name}
+            onChange={e => setProjectForm({...projectForm, name: e.target.value})}
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg mb-3 focus:outline-none focus:ring-2 focus:ring-purple-400" autoFocus />
+
+          <div className="flex gap-2 mb-3">
+            <select value={projectForm.type} onChange={e => setProjectForm({...projectForm, type: e.target.value})}
+              className="flex-1 px-2 py-1.5 text-xs border border-gray-200 rounded-lg">
+              <option value="Lead">🩷 Lead</option>
+              <option value="Gestion">🟢 Gestion</option>
+              <option value="Sinistre">🔵 Sinistre</option>
+            </select>
+            <select value={projectForm.priority} onChange={e => setProjectForm({...projectForm, priority: e.target.value})}
+              className="flex-1 px-2 py-1.5 text-xs border border-gray-200 rounded-lg">
+              <option value="À prioriser">À prioriser</option>
+              <option value="Haute">🔴 Haute</option>
+              <option value="Moyenne">🟡 Moyenne</option>
+              <option value="Basse">🟢 Basse</option>
+            </select>
+          </div>
+
+          <select value={projectForm.niveau} onChange={e => setProjectForm({...projectForm, niveau: e.target.value})}
+            className="w-full px-2 py-1.5 text-xs border border-gray-200 rounded-lg mb-3">
+            <option value="">Étape initiale...</option>
+            {projectForm.type === 'Gestion' ? (
+              <>
+                <option value="Ouverture">📋 Ouverture</option>
+                <option value="En cours">⚙️ En cours</option>
+                <option value="Attente pièces">📎 Attente pièces</option>
+                <option value="Attente tiers">⏳ Attente tiers</option>
+                <option value="Résolution">✅ Résolution</option>
+              </>
+            ) : projectForm.type === 'Sinistre' ? (
+              <>
+                <option value="Déclaration">📝 Déclaration</option>
+                <option value="Instruction">🔍 Instruction</option>
+                <option value="Expertise">👁️ Expertise</option>
+                <option value="Attente pièces">📎 Attente pièces</option>
+                <option value="Indemnisation">💰 Indemnisation</option>
+              </>
+            ) : (
+              <>
+                <option value="Prise de connaissance">Prise de connaissance</option>
+                <option value="Recueil d'infos">Recueil d'infos</option>
+                <option value="Devis">Devis</option>
+                <option value="Proposition">Proposition</option>
+                <option value="Échange">Échange</option>
+                <option value="Signature">Signature</option>
+                <option value="Mise en place">Mise en place</option>
+              </>
+            )}
+          </select>
+
+          <button onClick={async () => {
+            if (!projectForm.name) return;
+            setNotionLoading(true);
+            try {
+              const r = await fetch('/api/notion/create-project', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  name: projectForm.name,
+                  type: projectForm.type,
+                  priority: projectForm.priority,
+                  niveau: projectForm.niveau || null,
+                }),
+              });
+              const d = await r.json();
+              if (d.success) {
+                setShowCreateOpp(false);
+                setProjectForm({ name: '', type: 'Lead', priority: 'À prioriser', niveau: '', contratId: null });
+                setNotionSuccess('Projet créé !');
+                setTimeout(() => setNotionSuccess(null), 3000);
+              } else {
+                alert('Erreur: ' + (d.error || '?'));
+              }
+            } catch (e) { alert('Erreur: ' + e.message); }
+            setNotionLoading(false);
+          }} disabled={notionLoading || !projectForm.name}
+            className="w-full py-2 bg-purple-500 text-white text-sm rounded-lg hover:bg-purple-600 disabled:opacity-50 font-medium">
+            {notionLoading ? 'Création...' : '✓ Créer'}
+          </button>
         </div>
       </div>
     )}
