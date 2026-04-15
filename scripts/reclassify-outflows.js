@@ -10,7 +10,7 @@ function classify(rawDetail, type, subtype) {
   const t = (type || '').trim().toUpperCase();
   const r = (nature, category) => [nature, category, tagFor(nature)];
   if (d.includes('AL HOLDING') || d.includes('ALHOLDING')) return r('HORS_EXPL', 'Remboursement dette AL Holding');
-  if (d.includes('SABBAN')) return r('PRO', 'Salaires');
+  if (d.includes('SABBAN')) return r('PERSO', 'Salaires');
   if (d.includes('SDC 190 BD BINEAU') || d.includes('SDC 190 BINEAU')) return r('PRO', 'Loyer pro');
   if (d.includes('LUMAY') || d.includes('LUMA AVOCAT')) return r('PRO', 'Honoraires');
   if (d.includes('KODSI') || d.includes('SARINA') || d.includes('COACHING')) return r('PRO', 'Coaching');

@@ -8,7 +8,7 @@ export function classify(rawDetail, type = '', subtype = '') {
 
   let nature, category;
   if (d.includes('AL HOLDING') || d.includes('ALHOLDING')) [nature, category] = ['HORS_EXPL', 'Remboursement dette AL Holding'];
-  else if (d.includes('SABBAN')) [nature, category] = ['PRO', 'Salaires'];
+  else if (d.includes('SABBAN')) [nature, category] = ['PERSO', 'Salaires'];
   else if (d.includes('SDC 190 BD BINEAU') || d.includes('SDC 190 BINEAU')) [nature, category] = ['PRO', 'Loyer pro'];
   else if (d.includes('LUMAY') || d.includes('LUMA AVOCAT')) [nature, category] = ['PRO', 'Honoraires'];
   else if (d.includes('KODSI') || d.includes('SARINA') || d.includes('COACHING')) [nature, category] = ['PRO', 'Coaching'];

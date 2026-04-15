@@ -17,7 +17,7 @@ const NATURE_GROUP_LABEL = { PRO: 'PRO', PERSO: 'PERSO', HORS_EXPL: 'HORS EXPLOI
 
 const CATEGORIES_BY_NATURE = {
   PRO: ['Salaires','Loyer pro','Honoraires','Coaching','Mutuelle','Logiciels','Assurance Pro','Rbt exceptionnel client','Telecom','IT / Hébergement','Domiciliation','Formation','Réglementation','Frais bancaires','Autre Pro'],
-  PERSO: ['Alimentation & vie courante','Dons','Amazon','Shopping','Auto / Déplacements','Divers perso'],
+  PERSO: ['Salaires','Alimentation & vie courante','Dons','Amazon','Shopping','Auto / Déplacements','Divers perso'],
   HORS_EXPL: ['Remboursement dette AL Holding','Apport associé','Autre hors expl.'],
 };
 
