@@ -161,12 +161,13 @@ export default function OverviewSubtab() {
   };
 
   const handleUpdateTransaction = async (id, body) => {
+    // Optimistic update — UI bouge instantanément
+    setAllTxns(prev => prev.map(t => t.id === id ? { ...t, ...body, user_overridden: 1 } : t));
     await fetch(`/api/finance/outflows?id=${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    await refreshData();
   };
 
   const kpiCardClass = (isActive) =>
