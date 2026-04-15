@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { initGeminiChat, saveGeminiUrl } from '@/lib/gemini-chat';
 
 // Status options for dropdown
 const STATUSES = [
@@ -51,10 +52,12 @@ function ContactSection({ conversation, notionEmail, onUpdateStatus, onUpdateNam
   const [editingEmail, setEditingEmail] = useState(false);
   const [nameValue, setNameValue] = useState('');
   const [emailValue, setEmailValue] = useState('');
+  const [localStatus, setLocalStatus] = useState(conversation?.status || 'inbox');
 
   useEffect(() => {
     setNameValue(conversation?.custom_name || conversation?.display_name || '');
     setEmailValue(conversation?.email || '');
+    setLocalStatus(conversation?.status || 'inbox');
   }, [conversation]);
 
   if (!conversation) return null;
@@ -69,8 +72,23 @@ function ContactSection({ conversation, notionEmail, onUpdateStatus, onUpdateNam
       <div className="flex gap-2">
         <div className="w-28 flex-shrink-0">
           <select
-            value={conversation.status || 'inbox'}
-            onChange={(e) => onUpdateStatus?.(e.target.value)}
+            value={localStatus}
+            onChange={(e) => {
+              const newStatus = e.target.value;
+              setLocalStatus(newStatus);
+              if (onUpdateStatus) {
+                onUpdateStatus(newStatus);
+              } else {
+                const jid = conversation?.jid;
+                if (jid) {
+                  fetch('/api/whatsapp/update-status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ jid, status: newStatus })
+                  });
+                }
+              }
+            }}
             className="w-full px-2 py-1.5 bg-gray-50 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500/50"
           >
             {STATUSES.map(status => (
@@ -209,8 +227,60 @@ function DossierSection({ dossier, onLink, onUnlink, isLoading }) {
   );
 }
 
+// Lead stage colors and order
+const STAGE_COLORS = {
+  'Prise de connaissance': 'bg-slate-100 text-slate-700',
+  "Recueil d'infos": 'bg-amber-100 text-amber-700',
+  'Devis': 'bg-blue-100 text-blue-700',
+  'Proposition': 'bg-indigo-100 text-indigo-700',
+  'Échange': 'bg-purple-100 text-purple-700',
+  'Signature': 'bg-pink-100 text-pink-700',
+  'Mise en place': 'bg-emerald-100 text-emerald-700',
+  'Gagné': 'bg-green-100 text-green-700',
+  'Perdu': 'bg-red-100 text-red-700',
+};
+const STAGES_ORDER = ['Prise de connaissance', "Recueil d'infos", 'Devis', 'Proposition', 'Échange', 'Signature', 'Mise en place', 'Gagné'];
+
+// Contracts section — affiche les contrats du dossier lié
+function ContractsSection({ contracts = [], onOpenContract, isLoading }) {
+  if (isLoading) {
+    return (
+      <div className="space-y-2 animate-pulse">
+        <div className="h-10 bg-gray-100 rounded-lg" />
+        <div className="h-10 bg-gray-100 rounded-lg" />
+      </div>
+    );
+  }
+  if (contracts.length === 0) {
+    return <p className="text-sm text-[#667781] py-2">Aucun contrat</p>;
+  }
+  return (
+    <div className="space-y-1.5">
+      {contracts.map(c => (
+        <button
+          key={c.id}
+          onClick={() => onOpenContract?.(c.id)}
+          className="w-full text-left border border-gray-200 rounded-lg px-3 py-2 hover:bg-gray-50 transition-colors"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-sm font-medium text-[#111b21] truncate">{c.name}</span>
+            <span className={`text-[10px] shrink-0 px-1.5 py-0.5 rounded-full ${c.desactive ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+              {c.desactive ? 'Résilié' : 'Actif'}
+            </span>
+          </div>
+          {(c.productType || c.type_assurance || c.cie_details) && (
+            <div className="text-xs text-gray-500 mt-0.5 truncate">
+              {c.productType || c.type_assurance}{c.cie_details ? ` · ${c.cie_details}` : ''}
+            </div>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // Projects section
-function ProjectsSection({ projects = [], onCreateProject, onToggleTask, isLoading }) {
+function ProjectsSection({ projects = [], onCreateProject, onToggleTask, onOpenTask, isLoading }) {
   const [expandedProject, setExpandedProject] = useState(null);
 
   if (isLoading) {
@@ -255,8 +325,37 @@ function ProjectsSection({ projects = [], onCreateProject, onToggleTask, isLoadi
                 {project.type || 'Projet'}
               </span>
               <span className="text-sm font-medium text-[#111b21] truncate">{project.name}</span>
+              {project.type === 'Lead' && (project.niveau || project.level) && (
+                <span className={`text-[10px] px-1.5 py-0.5 rounded ${STAGE_COLORS[project.niveau || project.level] || 'bg-gray-100 text-gray-700'}`}>
+                  {project.niveau || project.level}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2">
+              {project.type === 'Lead' && (project.niveau || project.level) && (() => {
+                const currentStage = project.niveau || project.level;
+                const idx = STAGES_ORDER.indexOf(currentStage);
+                if (idx >= 0 && idx < STAGES_ORDER.length - 1) {
+                  const nextStage = STAGES_ORDER[idx + 1];
+                  return (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        fetch('/api/notion/update-project-stage', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ projectId: project.id, stage: nextStage }),
+                        });
+                      }}
+                      className="text-[10px] px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100 transition-colors whitespace-nowrap"
+                      title={`Avancer vers : ${nextStage}`}
+                    >
+                      Avancer →
+                    </button>
+                  );
+                }
+                return null;
+              })()}
               {project.tasks?.length > 0 && (
                 <span className="text-xs text-[#667781]">
                   {project.tasks.filter(t => t.completed).length}/{project.tasks.length}
@@ -277,20 +376,23 @@ function ProjectsSection({ projects = [], onCreateProject, onToggleTask, isLoadi
           {expandedProject === project.id && project.tasks?.length > 0 && (
             <div className="border-t border-gray-100 px-3 py-2 space-y-1 bg-gray-50">
               {project.tasks.map(task => (
-                <label
+                <div
                   key={task.id}
-                  className="flex items-start gap-2 py-1 cursor-pointer hover:bg-white px-2 rounded"
+                  className="flex items-start gap-2 py-1 hover:bg-white px-2 rounded"
                 >
                   <input
                     type="checkbox"
                     checked={task.completed}
                     onChange={() => onToggleTask?.(task.id, !task.completed)}
-                    className="mt-0.5 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    className="mt-0.5 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                   />
-                  <span className={`text-sm ${task.completed ? 'text-gray-400 line-through' : 'text-[#3b4a54]'}`}>
+                  <button
+                    onClick={() => onOpenTask?.(task)}
+                    className={`text-sm text-left hover:underline ${task.completed ? 'text-gray-400 line-through' : 'text-[#3b4a54]'}`}
+                  >
                     {task.name}
-                  </span>
-                </label>
+                  </button>
+                </div>
               ))}
             </div>
           )}
@@ -396,11 +498,256 @@ function NotesSection({ notes, onUpdateNotes }) {
   );
 }
 
+// Gemini IA section — visible si contact + dossier
+function GeminiSection({ dossierDetails, conversation, messages }) {
+  const [copied, setCopied] = useState(false);
+  const [geminiUrl, setGeminiUrl] = useState('');
+  const [isEditing, setIsEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [chatName, setChatName] = useState('');
+
+  const geminiLink = dossierDetails?.geminiUrl || dossierDetails?.dossier?.geminiUrl || conversation?.gemini_url || null;
+  const hasDossier = !!conversation?.notion_dossier_id;
+  const contactName = conversation?.display_name || conversation?.name || conversation?.whatsapp_name || conversation?.phone || 'Contact';
+  const phone = conversation?.phone || conversation?.jid?.split('@')[0] || '';
+  const email = conversation?.email || '';
+  const dossierName = conversation?.notion_dossier_name || '';
+
+  const handleCreateChat = async () => {
+    const result = await initGeminiChat({
+      contactName,
+      phone,
+      email,
+      hasDossier,
+      dossierName,
+      dossierDetails,
+      messages: messages || []
+    });
+    setChatName(result.chatName);
+    setCopied(true);
+    setIsEditing(true); // Montrer directement le champ URL
+    setTimeout(() => setCopied(false), 3000);
+  };
+
+  const handleSaveUrl = async () => {
+    if (!geminiUrl.trim()) return;
+    setSaving(true);
+    try {
+      const dossierId = conversation?.notion_dossier_id;
+      if (dossierId) {
+        await saveGeminiUrl(dossierId, geminiUrl.trim());
+      }
+      await fetch('/api/whatsapp/update-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jid: conversation.jid, gemini_url: geminiUrl.trim() })
+      });
+      setIsEditing(false);
+    } catch (e) {
+      alert(e.message || 'Erreur sauvegarde');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {/* Lien Gemini existant */}
+      {(geminiLink || geminiUrl) && !isEditing && (
+        <a
+          href={geminiLink || geminiUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-full px-3 py-2.5 text-sm font-medium text-purple-700 bg-gradient-to-r from-purple-50 to-indigo-50 hover:from-purple-100 hover:to-indigo-100 rounded-lg border border-purple-200 transition-colors flex items-center justify-center gap-2"
+        >
+          ✨ Ouvrir Gemini
+        </a>
+      )}
+
+      {/* Bouton créer / recréer */}
+      <button
+        onClick={handleCreateChat}
+        className={`w-full px-3 py-2 text-sm rounded-lg border transition-colors flex items-center justify-center gap-1
+          ${copied
+            ? 'text-green-700 bg-green-50 border-green-200'
+            : 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border-indigo-200 border-dashed'
+          }`}
+      >
+        {copied ? `✅ Copié ! Colle dans Gemini → "${chatName}"` : (geminiLink ? '🔄 Recréer Chat IA' : '✨ Créer Chat IA')}
+      </button>
+
+      {/* Feedback après création */}
+      {copied && chatName && (
+        <div className="text-xs text-gray-500 bg-gray-50 rounded-lg p-2 space-y-1">
+          <p>1. Colle le prompt dans Gemini (CMD+V)</p>
+          <p>2. Renomme le chat : <strong className="text-gray-700">{chatName}</strong></p>
+          <p>3. Copie l'URL et colle-la ci-dessous</p>
+        </div>
+      )}
+
+      {/* Champ URL */}
+      {isEditing ? (
+        <div className="flex gap-1">
+          <input
+            type="text"
+            value={geminiUrl}
+            onChange={(e) => setGeminiUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleSaveUrl();
+              if (e.key === 'Escape') setIsEditing(false);
+            }}
+            className="flex-1 px-2 py-1.5 bg-white border border-purple-200 rounded text-xs focus:outline-none focus:ring-2 focus:ring-purple-500/30"
+            placeholder="https://gemini.google.com/app/..."
+            autoFocus
+          />
+          <button
+            onClick={handleSaveUrl}
+            disabled={saving || !geminiUrl.trim()}
+            className="px-3 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded disabled:opacity-50 transition-colors"
+          >
+            {saving ? '...' : 'OK'}
+          </button>
+          <button
+            onClick={() => setIsEditing(false)}
+            className="px-2 py-1 text-gray-400 hover:text-gray-600 text-xs"
+          >
+            ✕
+          </button>
+        </div>
+      ) : (
+        !geminiLink && !geminiUrl && (
+          <div
+            onClick={() => setIsEditing(true)}
+            className="px-3 py-1.5 bg-gray-50 border border-gray-200 rounded text-xs cursor-pointer hover:bg-gray-100 text-gray-400"
+          >
+            Coller URL Gemini...
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+// Linked conversation section (dedup)
+function LinkedConversationSection({ conversation, allConversations = [], onLink, onUnlink }) {
+  const [showSearch, setShowSearch] = useState(false);
+  const [search, setSearch] = useState('');
+  const [linking, setLinking] = useState(false);
+
+  const linkedJid = conversation?.linked_jid;
+  const linkedConv = linkedJid ? allConversations.find(c => c.jid === linkedJid) : null;
+  const linkedName = linkedConv?.display_name || linkedConv?.name || linkedConv?.whatsapp_name || linkedConv?.phone || linkedJid;
+
+  const searchResults = useMemo(() => {
+    if (!search.trim() || !showSearch) return [];
+    const q = search.toLowerCase();
+    return allConversations
+      .filter(c => c.jid !== conversation.jid && c.jid !== linkedJid)
+      .filter(c => {
+        const name = (c.display_name || c.name || c.whatsapp_name || c.phone || '').toLowerCase();
+        const phone = (c.phone || '').toLowerCase();
+        return name.includes(q) || phone.includes(q);
+      })
+      .slice(0, 8);
+  }, [search, showSearch, allConversations, conversation?.jid, linkedJid]);
+
+  const handleLink = useCallback(async (targetJid) => {
+    setLinking(true);
+    try {
+      await onLink?.(conversation.jid, targetJid);
+      setShowSearch(false);
+      setSearch('');
+    } catch (e) { console.error(e); }
+    setLinking(false);
+  }, [conversation?.jid, onLink]);
+
+  const handleUnlink = useCallback(async () => {
+    setLinking(true);
+    try { await onUnlink?.(conversation.jid); } catch (e) { console.error(e); }
+    setLinking(false);
+  }, [conversation?.jid, onUnlink]);
+
+  if (linkedJid) {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between p-2.5 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm">🔗</span>
+            <span className="text-sm font-medium text-blue-800 truncate">{linkedName}</span>
+          </div>
+          <button
+            onClick={handleUnlink}
+            disabled={linking}
+            className="text-xs text-red-600 hover:underline flex-shrink-0"
+          >
+            {linking ? '...' : 'Délier'}
+          </button>
+        </div>
+        <p className="text-xs text-gray-500">Cette conversation est liée. Les deux partagent le même dossier.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      {!showSearch ? (
+        <button
+          onClick={() => setShowSearch(true)}
+          className="w-full px-3 py-2 text-sm text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors"
+        >
+          🔗 Lier à un autre contact
+        </button>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Rechercher par nom ou numéro..."
+              className="flex-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              autoFocus
+            />
+            <button
+              onClick={() => { setShowSearch(false); setSearch(''); }}
+              className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-700"
+            >
+              ✕
+            </button>
+          </div>
+          {searchResults.length > 0 && (
+            <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+              {searchResults.map(c => (
+                <button
+                  key={c.jid}
+                  onClick={() => handleLink(c.jid)}
+                  disabled={linking}
+                  className="w-full text-left px-3 py-2 hover:bg-gray-50 transition-colors"
+                >
+                  <p className="text-sm font-medium text-gray-900 truncate">
+                    {c.display_name || c.name || c.whatsapp_name || c.phone}
+                  </p>
+                  {c.phone && <p className="text-xs text-gray-500">{c.phone}</p>}
+                </button>
+              ))}
+            </div>
+          )}
+          {search.trim() && searchResults.length === 0 && (
+            <p className="text-xs text-gray-500 text-center py-2">Aucun résultat</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Main CRM Panel component
 export default function CRMPanel({
   conversation,
   dossierDetails,
   documents = [],
+  messages = [],
+  allConversations = [],
   isLoading = false,
   onClose,
   onUpdateStatus,
@@ -413,7 +760,11 @@ export default function CRMPanel({
   onCreateProject,
   onCreateTask,
   onToggleTask,
-  onPreviewDoc
+  onOpenTask,
+  onPreviewDoc,
+  onLinkConversation,
+  onUnlinkConversation,
+  onOpenContract,
 }) {
   if (!conversation) return null;
 
@@ -424,6 +775,7 @@ export default function CRMPanel({
   } : null);
 
   const projects = dossierDetails?.projects || [];
+  const contracts = dossierDetails?.contracts || [];
 
   // Get email from Notion contact or dossier
   const notionEmail = dossierDetails?.contact?.email || dossierDetails?.dossier?.email || null;
@@ -482,6 +834,22 @@ export default function CRMPanel({
               projects={projects}
               onCreateProject={onCreateProject}
               onToggleTask={onToggleTask}
+              onOpenTask={onOpenTask}
+              isLoading={isLoading}
+            />
+          </Section>
+        )}
+
+        {/* Contrats */}
+        {dossier && (
+          <Section
+            title="Contrats"
+            icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>}
+            badge={contracts.length || null}
+          >
+            <ContractsSection
+              contracts={contracts}
+              onOpenContract={onOpenContract}
               isLoading={isLoading}
             />
           </Section>
@@ -505,9 +873,32 @@ export default function CRMPanel({
         >
           <NotesSection notes={conversation.notes} onUpdateNotes={onUpdateNotes} />
         </Section>
+
+        {/* Gemini IA */}
+        <Section
+          title="Gemini IA"
+          icon={<span className="text-sm">✨</span>}
+          defaultOpen={!!conversation?.notion_dossier_id}
+        >
+          <GeminiSection dossierDetails={dossierDetails} conversation={conversation} messages={messages} />
+        </Section>
+
+        {/* Linked conversation (dedup) */}
+        <Section
+          title={conversation.linked_jid ? 'Conversation liée' : 'Doublons'}
+          icon={<span className="text-sm">🔗</span>}
+          defaultOpen={!!conversation.linked_jid}
+        >
+          <LinkedConversationSection
+            conversation={conversation}
+            allConversations={allConversations}
+            onLink={onLinkConversation}
+            onUnlink={onUnlinkConversation}
+          />
+        </Section>
       </div>
     </div>
   );
 }
 
-export { Section, ContactSection, DossierSection, ProjectsSection, DocumentsSection, NotesSection };
+export { Section, ContactSection, DossierSection, ProjectsSection, DocumentsSection, NotesSection, LinkedConversationSection };
