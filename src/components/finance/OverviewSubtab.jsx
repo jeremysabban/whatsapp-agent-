@@ -1,8 +1,10 @@
 'use client';
 import { useState, useEffect, useMemo, Fragment, useCallback } from 'react';
 import { fmtEuro } from '@/lib/finance/format';
+import { tagClasses } from '@/lib/finance/tag-colors';
 import NatureBadge from '@/components/finance/shared/NatureBadge';
 import TagBadge from '@/components/finance/shared/TagBadge';
+import TagsManagerModal from '@/components/finance/TagsManagerModal';
 
 const NATURE_COLORS = {
   PRO: { bar: '#2563eb', bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
@@ -45,9 +47,22 @@ export default function OverviewSubtab() {
   const [totalInflows, setTotalInflows] = useState(0);
   const [loading, setLoading] = useState(true);
   const [natureFilter, setNatureFilter] = useState('');
+  const [tagFilter, setTagFilter] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedCats, setExpandedCats] = useState(new Set());
+  const [tags, setTags] = useState([]);
+  const [tagsManagerOpen, setTagsManagerOpen] = useState(false);
+
+  const tagsById = useMemo(() => Object.fromEntries(tags.map(t => [t.id, t])), [tags]);
+
+  const fetchTags = useCallback(async () => {
+    const r = await fetch('/api/finance/tags');
+    const d = await r.json();
+    setTags(d.tags || []);
+  }, []);
+
+  useEffect(() => { fetchTags(); }, [fetchTags]);
 
   // Debounce search input
   useEffect(() => {
@@ -80,8 +95,9 @@ export default function OverviewSubtab() {
     let list = allTxns;
     if (searchTerm) list = list.filter(t => matchesSearch(t, searchTerm));
     if (natureFilter) list = list.filter(t => t.nature === natureFilter);
+    if (tagFilter) list = list.filter(t => (t.tag || 'autre') === tagFilter);
     return list;
-  }, [allTxns, searchTerm, natureFilter]);
+  }, [allTxns, searchTerm, natureFilter, tagFilter]);
 
   // KPIs computed from filteredTxns
   const total = useMemo(() => filteredTxns.reduce((s, t) => s + t.amount, 0), [filteredTxns]);
@@ -112,17 +128,21 @@ export default function OverviewSubtab() {
     return [...map.values()];
   }, [filteredTxns]);
 
-  // Tag KPIs
+  // Tag totals — aggregate by dynamic tag id
   const tagTotals = useMemo(() => {
-    const result = { CHARGE: { count: 0, total: 0 }, PERSO: { count: 0, total: 0 } };
+    const m = new Map();
     for (const t of filteredTxns) {
-      const tag = t.tag || 'CHARGE';
-      if (!result[tag]) result[tag] = { count: 0, total: 0 };
-      result[tag].count++;
-      result[tag].total += t.amount;
+      const id = t.tag || 'autre';
+      const row = m.get(id) || { id, count: 0, total: 0 };
+      row.count++;
+      row.total += t.amount;
+      m.set(id, row);
     }
-    return result;
-  }, [filteredTxns]);
+    const total = filteredTxns.reduce((s, t) => s + t.amount, 0);
+    return [...m.values()]
+      .map(r => ({ ...r, tag: tagsById[r.id] || { id: r.id, label: r.id, color: 'slate' }, pct: total !== 0 ? (r.total / total) * 100 : 0 }))
+      .sort((a, b) => a.total - b.total);
+  }, [filteredTxns, tagsById]);
 
   if (loading) return <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-16 bg-gray-100 rounded-xl animate-pulse" />)}</div>;
   if (!allTxns.length) return <p className="text-gray-400">Aucune donnée</p>;
@@ -187,20 +207,49 @@ export default function OverviewSubtab() {
         </div>
       </div>
 
-      {/* Tag KPI Cards */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="relative overflow-hidden rounded-[10px] border border-slate-200 bg-white p-[14px_16px]">
-          <span className="absolute left-0 top-0 bottom-0 w-[3px] bg-violet-600" />
-          <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Total Charges</div>
-          <div className="text-[22px] font-bold mt-1 tabular-nums text-violet-700">{fmtEuro(tagTotals.CHARGE.total)}</div>
-          <div className="text-[11px] text-slate-400 mt-0.5">{tagTotals.CHARGE.count} ops</div>
+      {/* Dépenses par tag — tableau dynamique */}
+      <div className="bg-white rounded-[10px] border border-slate-200 p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Dépenses par tag</div>
+          <button
+            onClick={() => setTagsManagerOpen(true)}
+            className="text-[11px] px-2 py-1 rounded border border-slate-300 text-slate-600 bg-white hover:bg-slate-50"
+          >
+            ⚙️ Gérer les tags
+          </button>
         </div>
-        <div className="relative overflow-hidden rounded-[10px] border border-slate-200 bg-white p-[14px_16px]">
-          <span className="absolute left-0 top-0 bottom-0 w-[3px] bg-amber-500" />
-          <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Total Perso</div>
-          <div className="text-[22px] font-bold mt-1 tabular-nums text-amber-700">{fmtEuro(tagTotals.PERSO.total)}</div>
-          <div className="text-[11px] text-slate-400 mt-0.5">{tagTotals.PERSO.count} ops</div>
-        </div>
+        {tagTotals.length === 0 ? (
+          <div className="text-xs text-slate-400 py-2">Aucune transaction</div>
+        ) : (
+          <table className="w-full text-[12px] tabular-nums">
+            <tbody>
+              {tagTotals.map(row => {
+                const cls = tagClasses(row.tag.color);
+                const isActive = tagFilter === row.id;
+                const barWidth = Math.min(Math.abs(row.pct), 100);
+                return (
+                  <tr
+                    key={row.id}
+                    onClick={() => setTagFilter(isActive ? '' : row.id)}
+                    className={`cursor-pointer hover:bg-slate-50 ${isActive ? 'bg-slate-50 ring-1 ring-inset ' + cls.ring : ''}`}
+                  >
+                    <td className="py-1.5 pl-1 pr-2 w-[180px]">
+                      <span className={`inline-block px-2 py-0.5 rounded-md text-[10px] font-semibold uppercase ${cls.badge}`}>{row.tag.label}</span>
+                    </td>
+                    <td className="py-1.5 pr-3">
+                      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div className={`h-full ${cls.bar}`} style={{ width: `${barWidth}%` }} />
+                      </div>
+                    </td>
+                    <td className="py-1.5 pr-3 text-right text-slate-500 w-[70px]">{row.count} ops</td>
+                    <td className="py-1.5 pr-3 text-right font-semibold w-[110px]">{fmtEuro(row.total)}</td>
+                    <td className="py-1.5 pr-1 text-right text-slate-500 w-[60px]">{Math.abs(row.pct).toFixed(0)}%</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {/* Taux de charges — basé sur grandTotal (non filtré) */}
@@ -231,9 +280,10 @@ export default function OverviewSubtab() {
           onChange={e => setSearchInput(e.target.value)}
           className="px-2.5 py-1.5 border border-slate-300 rounded-md text-xs min-w-[200px]"
         />
-        {natureFilter && <span className="text-slate-500">Filtre: {NATURE_LABEL[natureFilter]}</span>}
-        {(natureFilter || searchInput) && (
-          <button onClick={() => { setSearchInput(''); setNatureFilter(''); }} className="ml-auto text-blue-600 cursor-pointer font-medium">
+        {natureFilter && <span className="text-slate-500">Nature: {NATURE_LABEL[natureFilter]}</span>}
+        {tagFilter && <span className="text-slate-500">Tag: {tagsById[tagFilter]?.label || tagFilter}</span>}
+        {(natureFilter || tagFilter || searchInput) && (
+          <button onClick={() => { setSearchInput(''); setNatureFilter(''); setTagFilter(''); }} className="ml-auto text-blue-600 cursor-pointer font-medium">
             Réinitialiser
           </button>
         )}
@@ -280,8 +330,8 @@ export default function OverviewSubtab() {
                     const catPctCA = totalInflows > 0 ? (Math.abs(cat.total) / totalInflows) * 100 : null;
                     // Dominant tag for category
                     const tagCounts = {};
-                    cat.txns.forEach(t => { const tg = t.tag || 'CHARGE'; tagCounts[tg] = (tagCounts[tg] || 0) + 1; });
-                    const dominantTag = Object.entries(tagCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'CHARGE';
+                    cat.txns.forEach(t => { const tg = t.tag || 'autre'; tagCounts[tg] = (tagCounts[tg] || 0) + 1; });
+                    const dominantTag = Object.entries(tagCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || 'autre';
                     return (
                       <Fragment key={catKey}>
                         <tr className="border-b border-slate-100 cursor-pointer hover:bg-slate-50/50"
@@ -294,7 +344,7 @@ export default function OverviewSubtab() {
                             <NatureBadge nature={cat.nature} />
                           </td>
                           <td className="px-3 py-2.5">
-                            <TagBadge tag={dominantTag} />
+                            <TagBadge tag={dominantTag} tagsById={tagsById} />
                           </td>
                           <td className="px-3 py-2.5 text-right text-slate-500">{cat.count}</td>
                           <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmtEuro(cat.total)}</td>
@@ -325,11 +375,10 @@ export default function OverviewSubtab() {
                             <td className="py-2">
                               <select
                                 className="border border-slate-300 rounded-md px-2 py-1 text-xs bg-white"
-                                value={txn.tag || 'CHARGE'}
+                                value={txn.tag || 'autre'}
                                 onChange={e => handleUpdateTransaction(txn.id, { tag: e.target.value })}
                               >
-                                <option value="CHARGE">Charge</option>
-                                <option value="PERSO">Perso</option>
+                                {tags.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
                               </select>
                             </td>
                             <td className="py-2" colSpan={2}>
@@ -354,6 +403,14 @@ export default function OverviewSubtab() {
           </tbody>
         </table>
       </div>
+
+      {tagsManagerOpen && (
+        <TagsManagerModal
+          tags={tags}
+          onClose={() => setTagsManagerOpen(false)}
+          onChanged={async () => { await fetchTags(); await refreshData(); }}
+        />
+      )}
     </div>
   );
 }

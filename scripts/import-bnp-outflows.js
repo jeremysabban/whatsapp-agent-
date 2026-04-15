@@ -7,8 +7,19 @@ const DB_PATH = path.join(__dirname, '..', 'data', 'whatsapp-agent.db');
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 
-// Load subscriptions
+// Load subscriptions + finance_tags
 const subscriptions = db.prepare('SELECT * FROM subscriptions').all();
+let financeTags = [];
+try { financeTags = db.prepare('SELECT id, pattern, position FROM finance_tags ORDER BY position ASC').all(); } catch {}
+function matchTagId(rawDetail) {
+  const d = (rawDetail || '').toUpperCase();
+  for (const t of financeTags) {
+    if (!t.pattern) continue;
+    try { if (new RegExp(t.pattern, 'i').test(d)) return t.id; }
+    catch { if (d.includes(t.pattern.toUpperCase())) return t.id; }
+  }
+  return 'autre';
+}
 
 function parseFR(str) {
   if (!str) return 0;
@@ -123,16 +134,16 @@ for (const csvPath of csvFiles) {
 
     // Match subscription
     const rawUpper = rawDetail.toUpperCase();
-    let subId = null, nature, category, tag;
+    let subId = null, nature, category;
     const matchedSub = subscriptions.find(s => rawUpper.includes(s.match_pattern.toUpperCase()));
     if (matchedSub) {
       subId = matchedSub.id;
       nature = matchedSub.nature;
       category = matchedSub.category;
-      tag = tagFor(nature);
     } else {
-      [nature, category, tag] = classify(rawDetail, type, subtype);
+      [nature, category] = classify(rawDetail, type, subtype);
     }
+    const tag = matchTagId(rawDetail);
 
     if (category === 'Divers perso') unclassified++;
 

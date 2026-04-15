@@ -39,33 +39,56 @@ function classify(rawDetail, type, subtype) {
 const db = new Database(path.join(__dirname, '..', 'data', 'whatsapp-agent.db'));
 db.pragma('journal_mode = WAL');
 
-// Also match subscriptions first
+// Match subscriptions first
 const subs = db.prepare('SELECT * FROM subscriptions').all();
 
-const rows = db.prepare('SELECT id, raw_detail, type, subtype, subscription_id FROM bank_outflows WHERE user_overridden = 0').all();
-const upd = db.prepare('UPDATE bank_outflows SET nature = ?, category = ?, subscription_id = ?, tag = ? WHERE id = ?');
+// Load finance_tags (dynamic, user-managed). Fallback empty if table missing.
+let financeTags = [];
+try { financeTags = db.prepare('SELECT id, pattern, position FROM finance_tags ORDER BY position ASC').all(); } catch {}
 
-let n = 0;
+function matchTagId(rawDetail) {
+  const d = (rawDetail || '').toUpperCase();
+  for (const t of financeTags) {
+    if (!t.pattern) continue;
+    try { if (new RegExp(t.pattern, 'i').test(d)) return t.id; }
+    catch { if (d.includes(t.pattern.toUpperCase())) return t.id; }
+  }
+  return 'autre';
+}
+
+// tag is re-applied from patterns (even on user_overridden rows, since former CHARGE/PERSO has no meaning)
+const rows = db.prepare('SELECT id, raw_detail, type, subtype, subscription_id, user_overridden FROM bank_outflows').all();
+const updAll = db.prepare('UPDATE bank_outflows SET nature = ?, category = ?, subscription_id = ?, tag = ? WHERE id = ?');
+const updTagOnly = db.prepare('UPDATE bank_outflows SET tag = ? WHERE id = ?');
+
+let n = 0, nTagOnly = 0;
 for (const r of rows) {
+  const newTag = matchTagId(r.raw_detail);
+  if (r.user_overridden) {
+    updTagOnly.run(newTag, r.id);
+    nTagOnly++;
+    continue;
+  }
   const rawUpper = (r.raw_detail || '').toUpperCase();
   const matchedSub = subs.find(s => rawUpper.includes(s.match_pattern.toUpperCase()));
-  let nature, category, tag, subId;
+  let nature, category, subId;
   if (matchedSub) {
     nature = matchedSub.nature;
     category = matchedSub.category;
-    tag = tagFor(nature);
     subId = matchedSub.id;
   } else {
-    [nature, category, tag] = classify(r.raw_detail, r.type, r.subtype);
+    [nature, category] = classify(r.raw_detail, r.type, r.subtype);
     subId = null;
   }
-  upd.run(nature, category, subId, tag, r.id);
+  updAll.run(nature, category, subId, newTag, r.id);
   n++;
 }
 
 // Stats
-const stats = db.prepare(`SELECT nature, COUNT(*) as count, ROUND(SUM(amount), 2) as total FROM bank_outflows GROUP BY nature`).all();
-console.log(`Re-classified ${n} outflows`);
-stats.forEach(s => console.log(`  ${s.nature}: ${s.count} ops, ${s.total} €`));
+const statsNat = db.prepare(`SELECT nature, COUNT(*) as count, ROUND(SUM(amount), 2) as total FROM bank_outflows GROUP BY nature`).all();
+const statsTag = db.prepare(`SELECT tag, COUNT(*) as count, ROUND(SUM(amount), 2) as total FROM bank_outflows GROUP BY tag ORDER BY total ASC`).all();
+console.log(`Re-classified ${n} outflows (+${nTagOnly} tag-only on overridden rows)`);
+statsNat.forEach(s => console.log(`  [nature] ${s.nature}: ${s.count} ops, ${s.total} €`));
+statsTag.forEach(s => console.log(`  [tag]    ${s.tag}: ${s.count} ops, ${s.total} €`));
 
 db.close();
