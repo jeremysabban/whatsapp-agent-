@@ -161,13 +161,24 @@ export default function OverviewSubtab() {
   };
 
   const handleUpdateTransaction = async (id, body) => {
+    const prevRow = allTxns.find(t => t.id === id);
     // Optimistic update — UI bouge instantanément
     setAllTxns(prev => prev.map(t => t.id === id ? { ...t, ...body, user_overridden: 1 } : t));
-    await fetch(`/api/finance/outflows?id=${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
+    try {
+      const r = await fetch(`/api/finance/outflows?id=${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${r.status}`);
+      }
+    } catch (e) {
+      // Rollback : restaure l'état précédent
+      if (prevRow) setAllTxns(prev => prev.map(t => t.id === id ? prevRow : t));
+      alert(`Erreur, changement annulé : ${e.message}`);
+    }
   };
 
   const kpiCardClass = (isActive) =>
