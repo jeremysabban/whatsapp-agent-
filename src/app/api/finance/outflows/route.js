@@ -28,7 +28,9 @@ export async function GET(request) {
       byNature[t.nature].total += t.amount;
     });
     const totalInflows = db.prepare(
-      `SELECT COALESCE(SUM(amount), 0) AS t FROM bank_commission_payments WHERE date BETWEEN ? AND ?`
+      `SELECT COALESCE(SUM(amount), 0) AS t
+         FROM bank_commission_payments
+         WHERE date BETWEEN ? AND ? AND amount > 0`
     ).get(from, to).t;
 
     const byCategory = [];

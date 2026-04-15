@@ -86,6 +86,9 @@ export default function OverviewSubtab() {
   // KPIs computed from filteredTxns
   const total = useMemo(() => filteredTxns.reduce((s, t) => s + t.amount, 0), [filteredTxns]);
 
+  // Grand total (un-filtered) — for Taux de charges KPI only
+  const grandTotal = useMemo(() => allTxns.reduce((s, t) => s + t.amount, 0), [allTxns]);
+
   const byNature = useMemo(() => {
     const map = {};
     for (const t of filteredTxns) {
@@ -200,9 +203,9 @@ export default function OverviewSubtab() {
         </div>
       </div>
 
-      {/* Taux de charges */}
-      {totalInflows > 0 && (() => {
-        const ratio = (Math.abs(total) / totalInflows) * 100;
+      {/* Taux de charges — basé sur grandTotal (non filtré) */}
+      {totalInflows > 0 && allTxns.length > 0 && (() => {
+        const ratio = (Math.abs(grandTotal) / totalInflows) * 100;
         const barColor = ratio < 50 ? 'bg-emerald-500' : ratio < 75 ? 'bg-orange-500' : 'bg-red-500';
         const textColor = ratio < 50 ? 'text-emerald-600' : ratio < 75 ? 'text-orange-600' : 'text-red-600';
         return (
@@ -214,7 +217,7 @@ export default function OverviewSubtab() {
             <div className="mt-2 h-2 w-full bg-slate-100 rounded-full overflow-hidden">
               <div className={`h-full ${barColor} transition-all`} style={{ width: `${Math.min(ratio, 100)}%` }} />
             </div>
-            <div className="text-[11px] text-slate-400 mt-1 tabular-nums">{fmtEuro(total)} / {fmtEuro(totalInflows)}</div>
+            <div className="text-[11px] text-slate-400 mt-1 tabular-nums">{fmtEuro(grandTotal)} / {fmtEuro(totalInflows)}</div>
           </div>
         );
       })()}
