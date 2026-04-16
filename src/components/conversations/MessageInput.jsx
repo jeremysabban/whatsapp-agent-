@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, memo } from 'react';
 import EmojiPicker from 'emoji-picker-react';
 
 function EmojiButton({ onClick }) {
@@ -47,7 +47,7 @@ function SendButton({ onClick, disabled = false }) {
   );
 }
 
-function AiBubble({ onSend, onClose, isSending, disabled }) {
+const AiBubble = memo(function AiBubble({ onSend, onClose }) {
   const [draft, setDraft] = useState('');
   const [improving, setImproving] = useState(false);
   const inputRef = useRef(null);
@@ -71,7 +71,7 @@ function AiBubble({ onSend, onClose, isSending, disabled }) {
   };
 
   const handleSend = () => {
-    if (!draft.trim() || isSending || disabled) return;
+    if (!draft.trim()) return;
     onSend(draft.trim());
     setDraft('');
     onClose();
@@ -83,7 +83,10 @@ function AiBubble({ onSend, onClose, isSending, disabled }) {
   };
 
   return (
-    <div className="absolute bottom-full mb-2 left-0 right-0 mx-4 z-20 bg-white rounded-xl shadow-lg border border-amber-200 overflow-hidden">
+    <div
+      className="absolute bottom-full mb-2 left-0 right-0 mx-4 z-20 bg-white rounded-xl shadow-lg border border-amber-200"
+      onClick={e => e.stopPropagation()}
+    >
       <div className="flex items-center justify-between px-3 py-2 bg-amber-50 border-b border-amber-100">
         <span className="text-xs font-medium text-amber-800">✨ Aide à l'écriture IA</span>
         <button onClick={onClose} className="text-amber-400 hover:text-amber-600 text-lg leading-none">×</button>
@@ -96,30 +99,24 @@ function AiBubble({ onSend, onClose, isSending, disabled }) {
         placeholder="Tapez votre message ici, puis améliorez-le avec l'IA..."
         rows={4}
         className="w-full px-3 py-2 text-sm text-[#3b4a54] placeholder-gray-400 resize-none focus:outline-none"
-        style={{ height: '100px' }}
+        style={{ height: '100px', overflow: 'auto' }}
       />
       <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-100">
-        <span className="text-[10px] text-gray-400">Enter = envoyer · Shift+Enter = retour ligne · Esc = fermer</span>
+        <span className="text-[10px] text-gray-400">Enter = envoyer · Esc = fermer</span>
         <div className="flex items-center gap-1.5">
-          <button
-            onClick={handleImprove}
-            disabled={improving || !draft.trim()}
-            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${improving ? 'bg-amber-200 text-amber-700' : 'bg-amber-100 hover:bg-amber-200 text-amber-700'} disabled:opacity-40`}
-          >
+          <button onClick={handleImprove} disabled={improving || !draft.trim()}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${improving ? 'bg-amber-200 text-amber-700' : 'bg-amber-100 hover:bg-amber-200 text-amber-700'} disabled:opacity-40`}>
             {improving ? '⏳ ...' : '✨ Améliorer'}
           </button>
-          <button
-            onClick={handleSend}
-            disabled={isSending || disabled || !draft.trim()}
-            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#25d366] text-white hover:bg-[#1fb855] disabled:opacity-40 transition-colors"
-          >
+          <button onClick={handleSend} disabled={!draft.trim()}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#25d366] text-white hover:bg-[#1fb855] disabled:opacity-40 transition-colors">
             Envoyer
           </button>
         </div>
       </div>
     </div>
   );
-}
+});
 
 export default function MessageInput({
   onSend,
@@ -156,6 +153,12 @@ export default function MessageInput({
     setFileAccept(accept);
     setTimeout(() => fileInputRef.current?.click(), 0);
   };
+
+  // Stable refs for AiBubble callbacks — never change, never cause re-render
+  const onSendRef = useRef(onSend);
+  onSendRef.current = onSend;
+  const stableAiSend = useCallback((msg) => { onSendRef.current?.(msg); }, []);
+  const stableAiClose = useCallback(() => { setShowAiBubble(false); }, []);
 
   const adjustHeight = useCallback(() => {
     const textarea = textareaRef.current;
@@ -220,22 +223,15 @@ export default function MessageInput({
       )}
 
       {showAiBubble && (
-        <AiBubble
-          onSend={(msg) => { onSend?.(msg); }}
-          onClose={() => setShowAiBubble(false)}
-          isSending={isSending}
-          disabled={disabled}
-        />
+        <AiBubble onSend={stableAiSend} onClose={stableAiClose} />
       )}
 
       <div className="flex items-end gap-2">
-        {/* Left buttons — always stable */}
         <div className="flex items-center">
           <EmojiButton onClick={() => setShowEmojiPicker(prev => !prev)} />
           <AttachmentButton onClick={() => setShowAttachMenu(prev => !prev)} />
         </div>
 
-        {/* Text input */}
         <div className="flex-1 bg-white rounded-lg border border-gray-200 overflow-hidden">
           <textarea
             ref={textareaRef}
@@ -250,9 +246,7 @@ export default function MessageInput({
           />
         </div>
 
-        {/* Right buttons — always same width, no conditional show/hide */}
         <div className="flex items-center gap-1">
-          {/* AI bubble toggle — always visible */}
           <button
             type="button"
             onClick={() => setShowAiBubble(prev => !prev)}
@@ -261,8 +255,6 @@ export default function MessageInput({
           >
             <span className="text-base">✨</span>
           </button>
-
-          {/* Send or Mic — always one visible, same size */}
           {hasText ? (
             <SendButton onClick={handleSend} disabled={isSending || disabled} />
           ) : (
@@ -277,7 +269,6 @@ export default function MessageInput({
           Enregistrement en cours...
         </div>
       )}
-
       {isSending && (
         <div className="flex items-center justify-center gap-2 mt-2 text-gray-500 text-sm">
           <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
