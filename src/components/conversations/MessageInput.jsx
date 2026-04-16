@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback, memo } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import EmojiPicker from 'emoji-picker-react';
+import AiWritingBubble from './AiWritingBubble';
 
 function EmojiButton({ onClick }) {
   return (
@@ -47,77 +48,6 @@ function SendButton({ onClick, disabled = false }) {
   );
 }
 
-const AiBubble = memo(function AiBubble({ onSend, onClose }) {
-  const [draft, setDraft] = useState('');
-  const [improving, setImproving] = useState(false);
-  const inputRef = useRef(null);
-
-  useEffect(() => { inputRef.current?.focus(); }, []);
-
-  const handleImprove = async () => {
-    if (!draft.trim() || improving) return;
-    setImproving(true);
-    try {
-      const res = await fetch('/api/ai/improve-text', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: draft, context: 'message WhatsApp professionnel mais cordial' })
-      });
-      const data = await res.json();
-      if (data.improved) setDraft(data.improved);
-    } catch {}
-    setImproving(false);
-    inputRef.current?.focus();
-  };
-
-  const handleSend = () => {
-    if (!draft.trim()) return;
-    onSend(draft.trim());
-    setDraft('');
-    onClose();
-  };
-
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
-    if (e.key === 'Escape') onClose();
-  };
-
-  return (
-    <div
-      className="absolute bottom-full mb-2 left-0 right-0 mx-4 z-20 bg-white rounded-xl shadow-lg border border-amber-200"
-      onClick={e => e.stopPropagation()}
-    >
-      <div className="flex items-center justify-between px-3 py-2 bg-amber-50 border-b border-amber-100">
-        <span className="text-xs font-medium text-amber-800">✨ Aide à l'écriture IA</span>
-        <button onClick={onClose} className="text-amber-400 hover:text-amber-600 text-lg leading-none">×</button>
-      </div>
-      <textarea
-        ref={inputRef}
-        value={draft}
-        onChange={e => setDraft(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder="Tapez votre message ici, puis améliorez-le avec l'IA..."
-        rows={4}
-        className="w-full px-3 py-2 text-sm text-[#3b4a54] placeholder-gray-400 resize-none focus:outline-none"
-        style={{ height: '100px', overflow: 'auto' }}
-      />
-      <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-100">
-        <span className="text-[10px] text-gray-400">Enter = envoyer · Esc = fermer</span>
-        <div className="flex items-center gap-1.5">
-          <button onClick={handleImprove} disabled={improving || !draft.trim()}
-            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${improving ? 'bg-amber-200 text-amber-700' : 'bg-amber-100 hover:bg-amber-200 text-amber-700'} disabled:opacity-40`}>
-            {improving ? '⏳ ...' : '✨ Améliorer'}
-          </button>
-          <button onClick={handleSend} disabled={!draft.trim()}
-            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#25d366] text-white hover:bg-[#1fb855] disabled:opacity-40 transition-colors">
-            Envoyer
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-});
-
 export default function MessageInput({
   onSend,
   onSendFile,
@@ -154,12 +84,6 @@ export default function MessageInput({
     setTimeout(() => fileInputRef.current?.click(), 0);
   };
 
-  // Stable refs for AiBubble callbacks — never change, never cause re-render
-  const onSendRef = useRef(onSend);
-  onSendRef.current = onSend;
-  const stableAiSend = useCallback((msg) => { onSendRef.current?.(msg); }, []);
-  const stableAiClose = useCallback(() => { setShowAiBubble(false); }, []);
-
   const adjustHeight = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
@@ -192,6 +116,15 @@ export default function MessageInput({
     }
   };
 
+  const handleAiSend = useCallback((msg) => {
+    onSend?.(msg);
+  }, [onSend]);
+
+  const handleAiClose = useCallback(() => {
+    setShowAiBubble(false);
+    textareaRef.current?.focus();
+  }, []);
+
   const handleRecordClick = () => {
     if (isRecording) onRecordStop?.();
     else onRecordStart?.();
@@ -222,9 +155,7 @@ export default function MessageInput({
         </>
       )}
 
-      {showAiBubble && (
-        <AiBubble onSend={stableAiSend} onClose={stableAiClose} />
-      )}
+      <AiWritingBubble isOpen={showAiBubble} onSend={handleAiSend} onClose={handleAiClose} />
 
       <div className="flex items-end gap-2">
         <div className="flex items-center">
@@ -247,12 +178,9 @@ export default function MessageInput({
         </div>
 
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setShowAiBubble(prev => !prev)}
+          <button type="button" onClick={() => setShowAiBubble(prev => !prev)}
             className={`p-2 rounded-full transition-colors ${showAiBubble ? 'bg-amber-200 text-amber-700' : 'bg-amber-50 hover:bg-amber-100 text-amber-600'}`}
-            title="Aide à l'écriture IA"
-          >
+            title="Aide à l'écriture IA">
             <span className="text-base">✨</span>
           </button>
           {hasText ? (
