@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import ConversationListItem from './ConversationListItem';
 
-// Filter options
-const FILTERS = [
+// Filter options (base)
+const BASE_FILTERS = [
   { id: 'all', label: 'Tous' },
   { id: 'unread', label: 'Non lus' },
   { id: 'client', label: 'Clients' },
@@ -13,6 +13,11 @@ const FILTERS = [
   { id: 'apporteur', label: 'Apporteurs' },
   { id: 'inbox', label: 'À classer' },
 ];
+
+const PERSO_FILTER = { id: 'perso', label: 'Perso' };
+
+// Exported FILTERS includes perso for compatibility
+const FILTERS = [...BASE_FILTERS, PERSO_FILTER];
 
 // Time period filters
 const TIME_FILTERS = [
@@ -36,6 +41,30 @@ export default function ConversationList({
   isLoading = false
 }) {
   const [showFilters, setShowFilters] = useState(false);
+  const [isJeremy, setIsJeremy] = useState(false);
+  const [hideLinked, setHideLinked] = useState(false);
+  const [localSearch, setLocalSearch] = useState(searchQuery);
+  const searchRef = useRef(null);
+
+  useEffect(() => {
+    const id = setTimeout(() => onSearchChange?.(localSearch), 200);
+    return () => clearTimeout(id);
+  }, [localSearch]);
+
+  useEffect(() => {
+    if (searchQuery !== localSearch && !document.activeElement?.isSameNode(searchRef.current)) {
+      setLocalSearch(searchQuery);
+    }
+  }, [searchQuery]);
+
+  useEffect(() => {
+    const cookie = document.cookie.split('; ').find(c => c.startsWith('smartvalue_user='));
+    setIsJeremy(cookie?.split('=')[1] === 'Jeremy');
+  }, []);
+
+  const visibleFilters = useMemo(() => {
+    return isJeremy ? [...BASE_FILTERS, PERSO_FILTER] : BASE_FILTERS;
+  }, [isJeremy]);
 
   // Filter conversations
   const filteredConversations = useMemo(() => {
@@ -71,16 +100,27 @@ export default function ConversationList({
       case 'inbox':
         result = result.filter(c => c.status === 'inbox');
         break;
+      case 'perso':
+        result = result.filter(c => {
+          const name = (c.display_name || c.name || c.whatsapp_name || '').toLowerCase();
+          return c.status === 'perso' || name.includes('sabban') || name.includes('famille');
+        });
+        break;
       default:
         // 'all' - no additional filter
         break;
+    }
+
+    // Hide linked (duplicate) conversations
+    if (hideLinked) {
+      result = result.filter(c => !c.linked_jid);
     }
 
     // Sort by last message time (most recent first)
     result.sort((a, b) => (b.last_message_time || 0) - (a.last_message_time || 0));
 
     return result;
-  }, [conversations, searchQuery, activeFilter]);
+  }, [conversations, searchQuery, activeFilter, hideLinked]);
 
   // Count stats for filters
   const stats = useMemo(() => ({
@@ -91,6 +131,10 @@ export default function ConversationList({
     prospect: conversations.filter(c => c.status === 'prospect').length,
     apporteur: conversations.filter(c => c.status === 'apporteur').length,
     inbox: conversations.filter(c => c.status === 'inbox').length,
+    perso: conversations.filter(c => {
+      const name = (c.display_name || c.name || c.whatsapp_name || '').toLowerCase();
+      return c.status === 'perso' || name.includes('sabban') || name.includes('famille');
+    }).length,
   }), [conversations]);
 
   return (
@@ -116,9 +160,10 @@ export default function ConversationList({
         {/* Search bar */}
         <div className="relative">
           <input
+            ref={searchRef}
             type="text"
-            value={searchQuery}
-            onChange={(e) => onSearchChange?.(e.target.value)}
+            value={localSearch}
+            onChange={(e) => setLocalSearch(e.target.value)}
             placeholder="Rechercher ou démarrer une discussion"
             className="w-full pl-10 pr-4 py-2 bg-white rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#00a884]/50 border border-gray-200"
           />
@@ -135,7 +180,7 @@ export default function ConversationList({
         {/* Filters */}
         {showFilters && (
           <div className="flex gap-2 mt-3 flex-wrap">
-            {FILTERS.map(filter => (
+            {visibleFilters.map(filter => (
               <button
                 key={filter.id}
                 onClick={() => onFilterChange?.(filter.id)}
@@ -177,6 +222,19 @@ export default function ConversationList({
               </button>
             ))}
           </div>
+        )}
+
+        {/* Hide linked toggle */}
+        {showFilters && conversations.some(c => c.linked_jid) && (
+          <label className="flex items-center gap-2 mt-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={hideLinked}
+              onChange={(e) => setHideLinked(e.target.checked)}
+              className="rounded border-gray-300 text-[#00a884] focus:ring-[#00a884]"
+            />
+            <span className="text-xs text-[#667781]">Masquer les doublons liés</span>
+          </label>
         )}
       </div>
 
