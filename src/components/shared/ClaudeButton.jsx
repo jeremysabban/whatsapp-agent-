@@ -39,7 +39,7 @@ export default function ClaudeButton({ dossierId, dossierName }) {
         '[tape ici]',
       ].join('\n');
 
-      window.open(`https://claude.ai/new?q=${encodeURIComponent(prompt)}`, '_blank');
+      window.open(`https://claude.ai/project/019d9645-7417-7277-82d4-6c4cd55973af?q=${encodeURIComponent(prompt)}`, '_blank');
     } catch (e) {
       alert('Erreur : ' + e.message);
     } finally {
