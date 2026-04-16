@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/database';
+import { searchDossierEmails } from '@/lib/gmail-client';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,7 +14,7 @@ export async function GET(request, { params }) {
     const dossier = db.prepare('SELECT id, name, url, drive_url FROM dossiers WHERE id = ?').get(id);
     if (!dossier) return NextResponse.json({ error: 'Dossier not found' }, { status: 404 });
 
-    const contacts = db.prepare('SELECT name, email, phone FROM contacts WHERE dossier_id = ?').all(id);
+    const contacts = db.prepare('SELECT name, email, phone, company FROM contacts WHERE dossier_id = ?').all(id);
 
     const contracts = db.prepare(
       `SELECT name, type_assurance, date_effet, date_resiliation, desactive, cie_details
@@ -46,6 +47,49 @@ export async function GET(request, { params }) {
       return false;
     });
 
+    // --- Build Gmail search queries from dossier data ---
+    // Logique : email (from/to), nom exact (guillemets), n° contrat seul,
+    //           compagnie+contrat combiné (jamais compagnie seule), société client (guillemets)
+    const gmailQueries = [];
+    const searchLabels = [];
+
+    // 1) Tous les contacts : email (from/to) + nom exact
+    contacts.forEach(c => {
+      if (c.email) {
+        gmailQueries.push(`from:${c.email} OR to:${c.email}`);
+        searchLabels.push(c.email);
+      }
+      if (c.name && c.name.trim().length > 2) {
+        gmailQueries.push(`"${c.name.trim()}"`);
+        searchLabels.push(`"${c.name.trim()}"`);
+      }
+      if (c.company && c.company.trim().length > 2) {
+        gmailQueries.push(`"${c.company.trim()}"`);
+        searchLabels.push(`"${c.company.trim()}"`);
+      }
+    });
+
+    // 2) Numéros de contrat seuls + combo compagnie+contrat
+    contracts.forEach(c => {
+      if (c.name && c.name.trim().length > 3) {
+        gmailQueries.push(c.name.trim());
+        searchLabels.push(c.name.trim());
+      }
+      // Compagnie + contrat combiné (jamais compagnie seule)
+      if (c.cie_details && c.name) {
+        gmailQueries.push(`${c.cie_details} ${c.name}`);
+      }
+    });
+
+    // Search Gmail (non-blocking — returns [] if Gmail not configured)
+    let emailContext = [];
+    try {
+      emailContext = await searchDossierEmails(gmailQueries, 20, 180);
+    } catch (e) {
+      console.error('[ACTIVITY-SUMMARY] Gmail search failed:', e.message);
+    }
+
+    // --- Build summary lines ---
     const lines = [];
     recentMessages.forEach(m => {
       const d = new Date(m.timestamp * 1000).toLocaleDateString('fr-FR');
@@ -65,6 +109,11 @@ export async function GET(request, { params }) {
       lines.push(`${d} : ${l.description?.slice(0, 80) || l.action_type}`);
     });
 
+    // Format email context as compact lines
+    const emailLines = emailContext.map(e =>
+      `${e.dateStr} ${e.direction} ${e.peer} | ${e.subject}`
+    );
+
     return NextResponse.json({
       dossier,
       contacts,
@@ -72,6 +121,8 @@ export async function GET(request, { params }) {
       tasks,
       convJid,
       recentSummary: lines.slice(0, 8).join('\n') || 'Aucune activite recente.',
+      emailContext: emailLines,
+      emailSearchTerms: searchLabels,
     });
   } catch (e) {
     return NextResponse.json({ error: e.message }, { status: 500 });

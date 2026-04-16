@@ -121,6 +121,87 @@ export async function getUnreadCount() {
 }
 
 /**
+ * Search emails for a dossier using structured search terms.
+ * Queries are Gmail search strings — caller builds them with the right logic:
+ *   - "from:x OR to:x" for email addresses
+ *   - "\"Nom Prenom\"" for exact name match
+ *   - "numContrat" for contract numbers (unique enough alone)
+ *   - "compagnie numContrat" for company+contract combos (never company alone)
+ *   - "\"Nom Societe\"" for client company name
+ * @param {string[]} gmailQueries - Pre-built Gmail search strings
+ * @param {number} maxResults - Max total emails to return (deduplicated)
+ * @param {number} daysBack - Days to look back (default 180 = ~6 months)
+ */
+export async function searchDossierEmails(gmailQueries = [], maxResults = 20, daysBack = 180) {
+  if (!isGmailConfigured() || !gmailQueries.length) return [];
+
+  try {
+    const gmail = getGmailClient();
+    const after = Math.floor(Date.now() / 1000) - (daysBack * 86400);
+    const seenIds = new Set();
+    const allEmails = [];
+
+    for (const q of gmailQueries) {
+      if (!q || q.trim().length < 2) continue;
+      try {
+        const res = await gmail.users.messages.list({
+          userId: 'me',
+          q: `(${q}) after:${after}`,
+          maxResults: 10,
+        });
+        if (!res.data.messages) continue;
+
+        for (const msg of res.data.messages) {
+          if (seenIds.has(msg.id) || allEmails.length >= maxResults * 2) continue;
+          seenIds.add(msg.id);
+
+          try {
+            const detail = await gmail.users.messages.get({
+              userId: 'me',
+              id: msg.id,
+              format: 'metadata',
+              metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+            });
+
+            const h = detail.data.payload.headers;
+            const fromRaw = h.find(x => x.name === 'From')?.value || '';
+            const toRaw = h.find(x => x.name === 'To')?.value || '';
+            const subject = h.find(x => x.name === 'Subject')?.value || '(sans sujet)';
+            const dateStr = h.find(x => x.name === 'Date')?.value;
+            const date = dateStr ? new Date(dateStr) : new Date();
+            const snippet = (detail.data.snippet || '').slice(0, 120);
+
+            const isFromMe = fromRaw.includes('smart-value') || fromRaw.includes('direction@');
+            const direction = isFromMe ? '→' : '←';
+            const peer = isFromMe ? toRaw : fromRaw;
+            const peerClean = peer.replace(/<[^>]+>/g, '').replace(/"/g, '').trim().slice(0, 40);
+
+            allEmails.push({
+              id: msg.id,
+              date,
+              dateStr: date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' }),
+              direction,
+              peer: peerClean,
+              subject: subject.slice(0, 80),
+              snippet,
+            });
+          } catch (e) { /* skip individual message errors */ }
+        }
+      } catch (e) {
+        console.error(`[GMAIL] Search error for "${q}":`, e.message);
+      }
+    }
+
+    allEmails.sort((a, b) => b.date - a.date);
+    return allEmails.slice(0, maxResults);
+
+  } catch (error) {
+    console.error('[GMAIL] searchDossierEmails error:', error.message);
+    return [];
+  }
+}
+
+/**
  * Search emails by contact name or email address
  * Returns full email content for context
  * @param {string} searchQuery - Name or email to search for
