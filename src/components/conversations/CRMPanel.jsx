@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { initGeminiChat, saveGeminiUrl } from '@/lib/gemini-chat';
+import ClaudeButton from '@/components/shared/ClaudeButton';
+import AiNotesPanel from '@/components/shared/AiNotesPanel';
 
 // Status options for dropdown
 const STATUSES = [
@@ -498,132 +499,15 @@ function NotesSection({ notes, onUpdateNotes }) {
   );
 }
 
-// Gemini IA section — visible si contact + dossier
-function GeminiSection({ dossierDetails, conversation, messages }) {
-  const [copied, setCopied] = useState(false);
-  const [geminiUrl, setGeminiUrl] = useState('');
-  const [isEditing, setIsEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [chatName, setChatName] = useState('');
-
-  const geminiLink = dossierDetails?.geminiUrl || dossierDetails?.dossier?.geminiUrl || conversation?.gemini_url || null;
-  const hasDossier = !!conversation?.notion_dossier_id;
-  const contactName = conversation?.display_name || conversation?.name || conversation?.whatsapp_name || conversation?.phone || 'Contact';
-  const phone = conversation?.phone || conversation?.jid?.split('@')[0] || '';
-  const email = conversation?.email || '';
+// Claude IA section — bouton Claude + Notes IA
+function ClaudeSection({ conversation }) {
+  const dossierId = conversation?.notion_dossier_id;
   const dossierName = conversation?.notion_dossier_name || '';
-
-  const handleCreateChat = async () => {
-    const result = await initGeminiChat({
-      contactName,
-      phone,
-      email,
-      hasDossier,
-      dossierName,
-      dossierDetails,
-      messages: messages || []
-    });
-    setChatName(result.chatName);
-    setCopied(true);
-    setIsEditing(true); // Montrer directement le champ URL
-    setTimeout(() => setCopied(false), 3000);
-  };
-
-  const handleSaveUrl = async () => {
-    if (!geminiUrl.trim()) return;
-    setSaving(true);
-    try {
-      const dossierId = conversation?.notion_dossier_id;
-      if (dossierId) {
-        await saveGeminiUrl(dossierId, geminiUrl.trim());
-      }
-      await fetch('/api/whatsapp/update-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jid: conversation.jid, gemini_url: geminiUrl.trim() })
-      });
-      setIsEditing(false);
-    } catch (e) {
-      alert(e.message || 'Erreur sauvegarde');
-    } finally {
-      setSaving(false);
-    }
-  };
-
+  if (!dossierId) return <p className="text-xs text-[#667781]">Liez un dossier pour activer Claude IA.</p>;
   return (
-    <div className="space-y-2">
-      {/* Lien Gemini existant */}
-      {(geminiLink || geminiUrl) && !isEditing && (
-        <a
-          href={geminiLink || geminiUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="w-full px-3 py-2.5 text-sm font-medium text-purple-700 bg-gradient-to-r from-purple-50 to-indigo-50 hover:from-purple-100 hover:to-indigo-100 rounded-lg border border-purple-200 transition-colors flex items-center justify-center gap-2"
-        >
-          ✨ Ouvrir Gemini
-        </a>
-      )}
-
-      {/* Bouton créer / recréer */}
-      <button
-        onClick={handleCreateChat}
-        className={`w-full px-3 py-2 text-sm rounded-lg border transition-colors flex items-center justify-center gap-1
-          ${copied
-            ? 'text-green-700 bg-green-50 border-green-200'
-            : 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border-indigo-200 border-dashed'
-          }`}
-      >
-        {copied ? `✅ Copié ! Colle dans Gemini → "${chatName}"` : (geminiLink ? '🔄 Recréer Chat IA' : '✨ Créer Chat IA')}
-      </button>
-
-      {/* Feedback après création */}
-      {copied && chatName && (
-        <div className="text-xs text-gray-500 bg-gray-50 rounded-lg p-2 space-y-1">
-          <p>1. Colle le prompt dans Gemini (CMD+V)</p>
-          <p>2. Renomme le chat : <strong className="text-gray-700">{chatName}</strong></p>
-          <p>3. Copie l'URL et colle-la ci-dessous</p>
-        </div>
-      )}
-
-      {/* Champ URL */}
-      {isEditing ? (
-        <div className="flex gap-1">
-          <input
-            type="text"
-            value={geminiUrl}
-            onChange={(e) => setGeminiUrl(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleSaveUrl();
-              if (e.key === 'Escape') setIsEditing(false);
-            }}
-            className="flex-1 px-2 py-1.5 bg-white border border-purple-200 rounded text-xs focus:outline-none focus:ring-2 focus:ring-purple-500/30"
-            placeholder="https://gemini.google.com/app/..."
-            autoFocus
-          />
-          <button
-            onClick={handleSaveUrl}
-            disabled={saving || !geminiUrl.trim()}
-            className="px-3 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded disabled:opacity-50 transition-colors"
-          >
-            {saving ? '...' : 'OK'}
-          </button>
-          <button
-            onClick={() => setIsEditing(false)}
-            className="px-2 py-1 text-gray-400 hover:text-gray-600 text-xs"
-          >
-            ✕
-          </button>
-        </div>
-      ) : (
-        !geminiLink && !geminiUrl && (
-          <div
-            onClick={() => setIsEditing(true)}
-            className="px-3 py-1.5 bg-gray-50 border border-gray-200 rounded text-xs cursor-pointer hover:bg-gray-100 text-gray-400"
-          >
-            Coller URL Gemini...
-          </div>
-        )
-      )}
+    <div className="space-y-3">
+      <ClaudeButton dossierId={dossierId} dossierName={dossierName} />
+      <AiNotesPanel dossierId={dossierId} />
     </div>
   );
 }
@@ -874,13 +758,13 @@ export default function CRMPanel({
           <NotesSection notes={conversation.notes} onUpdateNotes={onUpdateNotes} />
         </Section>
 
-        {/* Gemini IA */}
+        {/* Claude IA */}
         <Section
-          title="Gemini IA"
-          icon={<span className="text-sm">✨</span>}
+          title="Claude IA"
+          icon={<span className="text-sm">💬</span>}
           defaultOpen={!!conversation?.notion_dossier_id}
         >
-          <GeminiSection dossierDetails={dossierDetails} conversation={conversation} messages={messages} />
+          <ClaudeSection conversation={conversation} />
         </Section>
 
         {/* Linked conversation (dedup) */}
