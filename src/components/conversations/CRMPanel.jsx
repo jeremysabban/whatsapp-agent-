@@ -499,7 +499,7 @@ function NotesSection({ notes, onUpdateNotes }) {
   );
 }
 
-// Claude IA section — bouton Claude + Notes IA
+// Claude IA section — ouvre conv existante OU crée un nouveau chat
 function ClaudeSection({ conversation, dossierDetails }) {
   const dossierId = conversation?.notion_dossier_id;
   const dossierName = conversation?.notion_dossier_name || '';
@@ -507,17 +507,18 @@ function ClaudeSection({ conversation, dossierDetails }) {
   if (!dossierId) return <p className="text-xs text-[#667781]">Liez un dossier pour activer Claude IA.</p>;
   return (
     <div className="space-y-3">
-      {claudeUrl && (
+      {claudeUrl ? (
         <a
           href={claudeUrl}
           target="_blank"
           rel="noopener noreferrer"
           className="w-full px-3 py-2 text-sm font-medium text-white bg-[#D97757] hover:bg-[#c4684a] rounded-lg transition-colors flex items-center justify-center gap-2"
         >
-          💬 Ouvrir la conversation Claude
+          💬 Ouvrir Claude
         </a>
+      ) : (
+        <ClaudeButton dossierId={dossierId} dossierName={dossierName} />
       )}
-      <ClaudeButton dossierId={dossierId} dossierName={dossierName} />
       <AiNotesPanel dossierId={dossierId} />
     </div>
   );

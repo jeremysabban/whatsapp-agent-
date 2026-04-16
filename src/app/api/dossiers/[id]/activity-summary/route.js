@@ -25,21 +25,32 @@ export async function GET(request, { params }) {
       `SELECT name, completed, date FROM tasks WHERE dossier_id = ? AND completed = 0 ORDER BY date ASC LIMIT 5`
     ).all(id);
 
-    const convJid = db.prepare('SELECT jid FROM conversations WHERE notion_dossier_id = ? LIMIT 1').get(id)?.jid;
+    const convJids = db.prepare('SELECT jid, name, whatsapp_name FROM conversations WHERE notion_dossier_id = ?').all(id);
+    const convJid = convJids[0]?.jid || null;
 
     let recentMessages = [];
-    if (convJid) {
-      recentMessages = db.prepare(
+    for (const conv of convJids) {
+      const msgs = db.prepare(
         `SELECT text, timestamp, from_me FROM messages
          WHERE conversation_jid = ? AND timestamp > ? AND text IS NOT NULL AND text != ''
-         ORDER BY timestamp DESC LIMIT 5`
-      ).all(convJid, thirtyDaysAgo / 1000);
+         ORDER BY timestamp DESC LIMIT 10`
+      ).all(conv.jid, thirtyDaysAgo / 1000);
+      msgs.forEach(m => { m._contactName = conv.whatsapp_name || conv.name || conv.jid; });
+      recentMessages.push(...msgs);
     }
+    recentMessages.sort((a, b) => b.timestamp - a.timestamp);
+    recentMessages = recentMessages.slice(0, 15);
 
-    const recentLogs = db.prepare(
-      `SELECT action_type, description, timestamp FROM agent_log
-       WHERE conversation_jid = ? AND timestamp > ? ORDER BY timestamp DESC LIMIT 5`
-    ).all(convJid || '', thirtyDaysAgo);
+    let recentLogs = [];
+    for (const conv of convJids) {
+      const logs = db.prepare(
+        `SELECT action_type, description, timestamp FROM agent_log
+         WHERE conversation_jid = ? AND timestamp > ? ORDER BY timestamp DESC LIMIT 5`
+      ).all(conv.jid, thirtyDaysAgo);
+      recentLogs.push(...logs);
+    }
+    recentLogs.sort((a, b) => b.timestamp - a.timestamp);
+    recentLogs = recentLogs.slice(0, 8);
 
     const recentContracts = contracts.filter(c => {
       if (c.date_resiliation && c.date_resiliation >= thirtyDaysAgoISO) return true;
@@ -93,7 +104,7 @@ export async function GET(request, { params }) {
     const lines = [];
     recentMessages.forEach(m => {
       const d = new Date(m.timestamp * 1000).toLocaleDateString('fr-FR');
-      const who = m.from_me ? 'Moi' : 'Client';
+      const who = m.from_me ? 'Moi' : (m._contactName || 'Client');
       const txt = (m.text || '').slice(0, 80).replace(/\n/g, ' ');
       lines.push(`WA ${d} (${who}) : ${txt}`);
     });
