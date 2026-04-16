@@ -23,6 +23,7 @@ import FinanceView from './FinanceView';
 import DashboardView from './DashboardView';
 import EmailsView from './EmailsView';
 import DriveExplorer from './shared/DriveExplorer';
+import AiWritingBubble, { setGlobalSendFn } from './conversations/AiWritingBubble';
 
 // ==================== CONSTANTS ====================
 const STATUSES = {
@@ -1830,6 +1831,18 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
     }
     setV2IsLoadingMessages(false);
   }, [conversations]);
+
+  // Bind AI bubble send to current conversation
+  const v2SelectedConvJidRef = useRef(null);
+  useEffect(() => {
+    v2SelectedConvJidRef.current = v2SelectedConv?.jid || null;
+  }, [v2SelectedConv]);
+  useEffect(() => {
+    setGlobalSendFn((text) => {
+      const jid = v2SelectedConvJidRef.current;
+      if (jid && text) handleV2SendMessage(jid, text);
+    });
+  }, []);
 
   // Send message (V2) — prefer @s.whatsapp.net over @lid for sending
   const handleV2SendMessage = useCallback(async (jid, text) => {
@@ -4238,6 +4251,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
   };
 
   return (<div className="flex h-screen bg-gray-100 text-gray-900 overflow-hidden">
+    <AiWritingBubble />
     <Sidebar />
     {sidebarOpen && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />}
     <div className="flex-1 flex flex-col min-w-0">

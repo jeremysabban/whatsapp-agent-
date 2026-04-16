@@ -1,27 +1,43 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 
-export default function AiWritingBubble({ isOpen, onClose, onSend }) {
+let globalSendFn = null;
+
+export function setGlobalSendFn(fn) {
+  globalSendFn = fn;
+}
+
+export default function AiWritingBubble() {
+  const [isOpen, setIsOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [improving, setImproving] = useState(false);
   const inputRef = useRef(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
-    if (isOpen) {
-      setTimeout(() => inputRef.current?.focus(), 50);
-    } else {
-      setDraft('');
-    }
-  }, [isOpen]);
+    const handleOpen = () => { setIsOpen(true); setTimeout(() => inputRef.current?.focus(), 50); };
+    const handleClose = () => { setIsOpen(false); setDraft(''); };
+    const handleToggle = () => { setIsOpen(prev => { if (!prev) setTimeout(() => inputRef.current?.focus(), 50); return !prev; }); };
+    window.addEventListener('ai-bubble-open', handleOpen);
+    window.addEventListener('ai-bubble-close', handleClose);
+    window.addEventListener('ai-bubble-toggle', handleToggle);
+    return () => {
+      window.removeEventListener('ai-bubble-open', handleOpen);
+      window.removeEventListener('ai-bubble-close', handleClose);
+      window.removeEventListener('ai-bubble-toggle', handleToggle);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
-    const handler = (e) => { if (e.key === 'Escape') onClose(); };
+    const handler = (e) => { if (e.key === 'Escape') { setIsOpen(false); setDraft(''); } };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   const handleImprove = async () => {
     if (!draft.trim() || improving) return;
@@ -39,35 +55,32 @@ export default function AiWritingBubble({ isOpen, onClose, onSend }) {
     inputRef.current?.focus();
   };
 
-  const handleSend = () => {
+  const handleSend = useCallback(() => {
     if (!draft.trim()) return;
-    onSend(draft.trim());
+    if (globalSendFn) globalSendFn(draft.trim());
     setDraft('');
-    onClose();
-  };
+    setIsOpen(false);
+  }, [draft]);
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
-  if (!isOpen) return null;
+  if (!mounted || !isOpen) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-end justify-center pb-20" onClick={onClose}>
-      <div
-        className="w-full max-w-2xl mx-4 bg-white rounded-xl shadow-2xl border border-amber-200 animate-in slide-in-from-bottom-4"
-        onClick={e => e.stopPropagation()}
-      >
+    <div className="fixed inset-0 z-[9999] flex items-end justify-center pb-20" onClick={() => { setIsOpen(false); setDraft(''); }}>
+      <div className="w-full max-w-2xl mx-4 bg-white rounded-xl shadow-2xl border border-amber-200" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-2.5 bg-amber-50 border-b border-amber-100 rounded-t-xl">
           <span className="text-sm font-medium text-amber-800">✨ Aide à l'écriture IA</span>
-          <button onClick={onClose} className="text-amber-400 hover:text-amber-600 text-xl leading-none px-1">×</button>
+          <button onClick={() => { setIsOpen(false); setDraft(''); }} className="text-amber-400 hover:text-amber-600 text-xl leading-none px-1">×</button>
         </div>
         <textarea
           ref={inputRef}
           value={draft}
           onChange={e => setDraft(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Tapez votre message ici, puis améliorez-le avec l'IA..."
+          placeholder="Tapez votre message, améliorez-le avec l'IA, puis envoyez dans WhatsApp..."
           className="w-full px-4 py-3 text-sm text-[#3b4a54] placeholder-gray-400 resize-none focus:outline-none"
           style={{ height: '120px', overflow: 'auto' }}
         />

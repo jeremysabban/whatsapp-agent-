@@ -2,7 +2,6 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import EmojiPicker from 'emoji-picker-react';
-import AiWritingBubble from './AiWritingBubble';
 
 function EmojiButton({ onClick }) {
   return (
@@ -61,7 +60,6 @@ export default function MessageInput({
   const [text, setText] = useState('');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
-  const [showAiBubble, setShowAiBubble] = useState(false);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const [fileAccept, setFileAccept] = useState('');
@@ -101,7 +99,6 @@ export default function MessageInput({
   }, [text, adjustHeight]);
 
   const handleChange = (e) => setText(e.target.value);
-
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
@@ -115,15 +112,6 @@ export default function MessageInput({
       textareaRef.current.style.overflow = 'hidden';
     }
   };
-
-  const handleAiSend = useCallback((msg) => {
-    onSend?.(msg);
-  }, [onSend]);
-
-  const handleAiClose = useCallback(() => {
-    setShowAiBubble(false);
-    textareaRef.current?.focus();
-  }, []);
 
   const handleRecordClick = () => {
     if (isRecording) onRecordStop?.();
@@ -155,8 +143,6 @@ export default function MessageInput({
         </>
       )}
 
-      <AiWritingBubble isOpen={showAiBubble} onSend={handleAiSend} onClose={handleAiClose} />
-
       <div className="flex items-end gap-2">
         <div className="flex items-center">
           <EmojiButton onClick={() => setShowEmojiPicker(prev => !prev)} />
@@ -178,8 +164,9 @@ export default function MessageInput({
         </div>
 
         <div className="flex items-center gap-1">
-          <button type="button" onClick={() => setShowAiBubble(prev => !prev)}
-            className={`p-2 rounded-full transition-colors ${showAiBubble ? 'bg-amber-200 text-amber-700' : 'bg-amber-50 hover:bg-amber-100 text-amber-600'}`}
+          <button type="button"
+            onClick={() => window.dispatchEvent(new Event('ai-bubble-toggle'))}
+            className="p-2 rounded-full transition-colors bg-amber-50 hover:bg-amber-100 text-amber-600"
             title="Aide à l'écriture IA">
             <span className="text-base">✨</span>
           </button>
