@@ -501,21 +501,54 @@ function NotesSection({ notes, onUpdateNotes }) {
 
 // Claude IA section — ouvre conv existante OU crée un nouveau chat
 function ClaudeSection({ conversation, dossierDetails }) {
+  const [waCopied, setWaCopied] = useState(false);
+  const [waLoading, setWaLoading] = useState(false);
   const dossierId = conversation?.notion_dossier_id;
   const dossierName = conversation?.notion_dossier_name || '';
   const claudeUrl = dossierDetails?.dossier?.claudeUrl;
+
+  const handleWaSummary = async () => {
+    setWaLoading(true);
+    try {
+      const r = await fetch(`/api/dossiers/${encodeURIComponent(dossierId)}/wa-summary?days=7`);
+      const d = await r.json();
+      if (d.error) { alert(d.error); return; }
+      await navigator.clipboard.writeText(d.summary);
+      setWaCopied(true);
+      setTimeout(() => setWaCopied(false), 3000);
+    } catch (e) {
+      alert('Erreur : ' + e.message);
+    } finally {
+      setWaLoading(false);
+    }
+  };
+
   if (!dossierId) return <p className="text-xs text-[#667781]">Liez un dossier pour activer Claude IA.</p>;
   return (
     <div className="space-y-3">
       {claudeUrl ? (
-        <a
-          href={claudeUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="w-full px-3 py-2 text-sm font-medium text-white bg-[#D97757] hover:bg-[#c4684a] rounded-lg transition-colors flex items-center justify-center gap-2"
-        >
-          💬 Ouvrir Claude
-        </a>
+        <div className="flex gap-2">
+          <a
+            href={claudeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-1 px-3 py-2 text-sm font-medium text-white bg-[#D97757] hover:bg-[#c4684a] rounded-lg transition-colors flex items-center justify-center gap-1.5"
+          >
+            💬 Ouvrir Claude
+          </a>
+          <button
+            onClick={handleWaSummary}
+            disabled={waLoading}
+            className={`px-3 py-2 text-xs font-medium rounded-lg border transition-colors ${
+              waCopied
+                ? 'bg-green-50 text-green-700 border-green-300'
+                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+            } disabled:opacity-50`}
+            title="Copier le résumé WA 7j dans le presse-papier, puis coller dans Claude"
+          >
+            {waLoading ? '...' : waCopied ? '✅ Copié' : '📋 WA 7j'}
+          </button>
+        </div>
       ) : (
         <ClaudeButton dossierId={dossierId} dossierName={dossierName} />
       )}
