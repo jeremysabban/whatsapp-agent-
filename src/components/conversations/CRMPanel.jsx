@@ -523,7 +523,17 @@ function ClaudeSection({ conversation, dossierDetails }) {
     }
   };
 
-  if (!dossierId) return <p className="text-xs text-[#667781]">Liez un dossier pour activer Claude IA.</p>;
+  const jid = conversation?.jid;
+  const cName = conversation?.display_name || conversation?.name || conversation?.whatsapp_name || '';
+
+  if (!dossierId) {
+    return (
+      <div className="space-y-3">
+        <ClaudeButton conversationJid={jid} contactName={cName} />
+        <p className="text-[11px] text-[#667781]">Prospect sans dossier — Claude cherchera les emails par nom/tel.</p>
+      </div>
+    );
+  }
   return (
     <div className="space-y-3">
       {claudeUrl ? (
@@ -550,7 +560,7 @@ function ClaudeSection({ conversation, dossierDetails }) {
           </button>
         </div>
       ) : (
-        <ClaudeButton dossierId={dossierId} dossierName={dossierName} />
+        <ClaudeButton dossierId={dossierId} dossierName={dossierName} conversationJid={jid} contactName={cName} />
       )}
       <AiNotesPanel dossierId={dossierId} />
     </div>
