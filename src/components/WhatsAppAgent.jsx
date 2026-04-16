@@ -1077,6 +1077,7 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
   // ==================== SIDEBAR ====================
   const Sidebar = () => (<div className={`fixed inset-y-0 left-0 z-50 w-64 bg-gray-950 text-white transform transition-transform ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 lg:relative lg:z-0 flex flex-col`}>
     <div className="p-4 border-b border-gray-800"><div className="flex items-center gap-3"><div className="w-9 h-9 rounded-xl bg-emerald-500 flex items-center justify-center"><Icon name="message" className="w-5 h-5 text-white" /></div><div><h1 className="font-bold text-sm">WA Agent</h1><p className="text-xs text-gray-400">Smart Value</p></div></div>
+    <a href="https://claude.ai/project/019d9645-7417-7277-82d4-6c4cd55973af" target="_blank" rel="noopener noreferrer" className="mt-2 flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#D97757]/10 hover:bg-[#D97757]/20 text-[#D97757] text-xs font-medium transition-colors"><span>💬</span> Claude · Smart Value</a>
     <div className={`mt-3 flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs ${connected ? 'bg-emerald-500/10 text-emerald-400' : connecting ? 'bg-amber-500/10 text-amber-400' : 'bg-red-500/10 text-red-400'}`}>
       <div className="flex items-center gap-2"><div className={`w-2 h-2 rounded-full ${connected ? 'bg-emerald-400 animate-pulse' : connecting ? 'bg-amber-400 animate-pulse' : 'bg-red-400'}`} />{connected ? 'WhatsApp connecté' : connecting ? 'Connexion...' : 'Déconnecté'}</div>
       {connected ? (
