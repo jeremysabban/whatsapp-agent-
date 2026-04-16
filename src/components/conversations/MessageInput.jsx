@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import EmojiPicker from 'emoji-picker-react';
 
 // Emoji picker button (simplified - could be enhanced with full picker)
 function EmojiButton({ onClick }) {
@@ -86,6 +87,7 @@ function SendButton({ onClick, disabled = false }) {
 
 export default function MessageInput({
   onSend,
+  onSendFile,
   onRecordStart,
   onRecordStop,
   isRecording = false,
@@ -95,7 +97,31 @@ export default function MessageInput({
 }) {
   const [text, setText] = useState('');
   const [isImproving, setIsImproving] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const [fileAccept, setFileAccept] = useState('');
+
+  const onEmojiClick = (emojiData) => {
+    setText(prev => prev + emojiData.emoji);
+    textareaRef.current?.focus();
+    setShowEmojiPicker(false);
+  };
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      onSendFile?.(file);
+    }
+    e.target.value = '';
+    setShowAttachMenu(false);
+  };
+
+  const openFilePicker = (accept) => {
+    setFileAccept(accept);
+    setTimeout(() => fileInputRef.current?.click(), 0);
+  };
 
   // AI Text Improvement
   const handleImprove = async () => {
@@ -118,22 +144,25 @@ export default function MessageInput({
     textareaRef.current?.focus();
   };
 
-  // Auto-resize textarea
+  // Auto-resize textarea (flicker-free)
   const adjustHeight = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
-    // Reset height to auto to get the correct scrollHeight
-    textarea.style.height = 'auto';
-
-    // Set new height (max 5 lines ~ 120px)
-    const newHeight = Math.min(textarea.scrollHeight, 120);
+    // Use overflow hidden to measure without visual jump
+    textarea.style.overflow = 'hidden';
+    textarea.style.height = '0';
+    const scrollH = textarea.scrollHeight;
+    const maxH = 120;
+    const newHeight = Math.min(scrollH, maxH);
     textarea.style.height = `${newHeight}px`;
+    // Allow scroll only when max height is reached
+    textarea.style.overflow = scrollH > maxH ? 'auto' : 'hidden';
   }, []);
 
-  // Adjust height when text changes
+  // Adjust height when text changes — use requestAnimationFrame to batch with paint
   useEffect(() => {
-    adjustHeight();
+    requestAnimationFrame(adjustHeight);
   }, [text, adjustHeight]);
 
   // Handle text input
@@ -160,7 +189,8 @@ export default function MessageInput({
 
     // Reset textarea height
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = '40px';
+      textareaRef.current.style.overflow = 'hidden';
     }
   };
 
@@ -176,12 +206,54 @@ export default function MessageInput({
   const hasText = text.trim().length > 0;
 
   return (
-    <div className="bg-[#f0f2f5] px-4 py-2 border-t border-gray-200">
+    <div className="relative bg-[#f0f2f5] px-4 py-2 border-t border-gray-200">
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={fileAccept}
+        onChange={handleFileSelect}
+        className="hidden"
+      />
+
+      {/* Emoji picker overlay */}
+      {showEmojiPicker && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setShowEmojiPicker(false)} />
+          <div className="absolute bottom-full mb-2 left-4 z-20">
+            <EmojiPicker onEmojiClick={onEmojiClick} width={350} height={400} />
+          </div>
+        </>
+      )}
+
+      {/* Attachment menu overlay */}
+      {showAttachMenu && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setShowAttachMenu(false)} />
+          <div className="absolute bottom-full mb-2 left-16 z-20 bg-white rounded-lg shadow-lg border border-gray-200 py-2 min-w-[180px]">
+            <button
+              type="button"
+              onClick={() => openFilePicker('image/*,video/*')}
+              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+            >
+              Photo/Video
+            </button>
+            <button
+              type="button"
+              onClick={() => openFilePicker('.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv')}
+              className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+            >
+              Document
+            </button>
+          </div>
+        </>
+      )}
+
       <div className="flex items-end gap-2">
         {/* Left buttons */}
         <div className="flex items-center">
-          <EmojiButton onClick={() => {/* TODO: Open emoji picker */}} />
-          <AttachmentButton onClick={() => {/* TODO: Open attachment menu */}} />
+          <EmojiButton onClick={() => setShowEmojiPicker(prev => !prev)} />
+          <AttachmentButton onClick={() => setShowAttachMenu(prev => !prev)} />
         </div>
 
         {/* Text input */}
@@ -198,13 +270,14 @@ export default function MessageInput({
             style={{
               minHeight: '40px',
               maxHeight: '120px',
-              lineHeight: '20px'
+              lineHeight: '20px',
+              overflow: 'hidden'
             }}
           />
         </div>
 
-        {/* Right buttons - AI + Send or Mic */}
-        <div className="flex items-center gap-1">
+        {/* Right buttons - fixed width to prevent layout shifts */}
+        <div className="flex items-center gap-1" style={{ minWidth: '80px', justifyContent: 'flex-end' }}>
           {/* AI Improve button - only when there's text */}
           {hasText && (
             <button
