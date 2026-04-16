@@ -94,9 +94,9 @@ function AiBubble({ onSend, onClose, isSending, disabled }) {
         onChange={e => setDraft(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="Tapez votre message ici, puis améliorez-le avec l'IA..."
-        rows={3}
+        rows={4}
         className="w-full px-3 py-2 text-sm text-[#3b4a54] placeholder-gray-400 resize-none focus:outline-none"
-        style={{ minHeight: '70px', maxHeight: '160px' }}
+        style={{ height: '100px' }}
       />
       <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-t border-gray-100">
         <span className="text-[10px] text-gray-400">Enter = envoyer · Shift+Enter = retour ligne · Esc = fermer</span>

@@ -274,14 +274,20 @@ export default function WhatsAppAgent() {
   const searchTimeoutRef = useRef(null);
 
   // ==================== DATA FETCHING ====================
+  const convHashRef = useRef('');
   const loadConversations = useCallback(async (label, time) => {
     try {
       const t = time !== undefined ? time : activeTimePeriod;
       const params = new URLSearchParams();
-      // Don't filter by status on API - we filter client-side by the status field
       if (t) params.append('time', t);
       const data = await api(`conversations?${params}`);
-      setConversations(data.conversations || []); setStats(data.stats || {});
+      const newConvs = data.conversations || [];
+      const hash = newConvs.map(c => `${c.jid}:${c.last_message_time}:${c.unread_count}:${c.status}`).join('|');
+      if (hash !== convHashRef.current) {
+        convHashRef.current = hash;
+        setConversations(newConvs);
+      }
+      setStats(data.stats || {});
       if (data.labelStats) setLabelStats(data.labelStats);
       if (data.allLabels) setAllLabels(data.allLabels);
     } catch (e) { console.error('Load error:', e); }
