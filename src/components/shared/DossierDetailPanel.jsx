@@ -110,6 +110,17 @@ export default function DossierDetailPanel({ dossierId, onClose, onOpenProject, 
                 Drive &#x27F6;
               </a>
             )}
+            {dossier.dossier?.claudeUrl && (
+              <a
+                href={dossier.dossier.claudeUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-[#D97757] hover:text-[#c4684a] font-medium"
+                title="Ouvrir la conversation Claude"
+              >
+                💬 Claude &#x27F6;
+              </a>
+            )}
             {findConversationJid() && (
               <button
                 onClick={() => onOpenConversation?.(findConversationJid())}

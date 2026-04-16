@@ -384,6 +384,7 @@ export function getDb() {
     _db.exec(`CREATE INDEX IF NOT EXISTS idx_outflows_nature_cat ON bank_outflows(nature, category)`);
     _db.exec(`CREATE INDEX IF NOT EXISTS idx_outflows_sub ON bank_outflows(subscription_id)`);
 
+    addCol('dossiers', 'claude_url', 'TEXT DEFAULT NULL');
     addCol('dossiers', 'ai_notes', "TEXT DEFAULT ''");
     addCol('dossiers', 'ai_notes_updated_at', 'INTEGER');
 
