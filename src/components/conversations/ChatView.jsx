@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import ChatHeader from './ChatHeader';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
+import SaveToDriveModal from './SaveToDriveModal';
 
 export default function ChatView({
   conversation,
@@ -16,6 +17,11 @@ export default function ChatView({
   onRecordStop,
   onAddTask,
   onAddProject,
+  onSaveToFolder,
+  onCreateTaskFromDoc,
+  onShowDocuments,
+  onUpdateStatus,
+  onLinkProject,
   showCRMPanel = false,
   isRecording = false,
   isSending = false,
@@ -27,6 +33,67 @@ export default function ChatView({
 }) {
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedMediaIds, setSelectedMediaIds] = useState(new Set());
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [isCollecting, setIsCollecting] = useState(false);
+  const [collectResult, setCollectResult] = useState(null);
+
+  // Bulk collect all docs to A TRIER
+  const handleCollectAllToDrive = useCallback(async () => {
+    if (!conversation?.jid || isCollecting) return;
+    setIsCollecting(true);
+    setCollectResult(null);
+    try {
+      const res = await fetch('/api/collector/whatsapp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationJid: conversation.jid })
+      });
+      const data = await res.json();
+      setCollectResult(data);
+      setTimeout(() => setCollectResult(null), 5000);
+    } catch (err) {
+      setCollectResult({ error: err.message });
+      setTimeout(() => setCollectResult(null), 5000);
+    } finally {
+      setIsCollecting(false);
+    }
+  }, [conversation?.jid, isCollecting]);
+
+  // Toggle media selection
+  const toggleMediaSelection = useCallback((messageId) => {
+    setSelectedMediaIds(prev => {
+      const next = new Set(prev);
+      if (next.has(messageId)) {
+        next.delete(messageId);
+      } else {
+        next.add(messageId);
+      }
+      return next;
+    });
+  }, []);
+
+  // Select all media messages
+  const selectAllMedia = useCallback(() => {
+    const mediaIds = new Set();
+    messages.forEach(msg => {
+      if (msg.message_type !== 'text' || msg.media_url) {
+        mediaIds.add(msg.id);
+      }
+    });
+    setSelectedMediaIds(mediaIds);
+  }, [messages]);
+
+  // Toggle selection mode
+  const handleToggleSelection = useCallback(() => {
+    setSelectionMode(prev => {
+      if (prev) {
+        setSelectedMediaIds(new Set());
+      }
+      return !prev;
+    });
+  }, []);
 
   // Handle send message
   const handleSend = useCallback((text) => {
@@ -70,7 +137,7 @@ export default function ChatView({
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-[#efeae2] overflow-hidden">
+    <div className="flex-1 flex flex-col bg-[#efeae2] overflow-hidden relative">
       {/* Header */}
       <ChatHeader
         conversation={conversation}
@@ -80,6 +147,13 @@ export default function ChatView({
         onMenu={() => {/* TODO: Show menu */}}
         onAddTask={onAddTask}
         onAddProject={onAddProject}
+        onShowDocuments={onShowDocuments}
+        onUpdateStatus={onUpdateStatus}
+        onLinkProject={onLinkProject}
+        onToggleSelection={handleToggleSelection}
+        onCollectAllToDrive={handleCollectAllToDrive}
+        isCollecting={isCollecting}
+        selectionMode={selectionMode}
         showCRMPanel={showCRMPanel}
         isMobile={isMobile}
       />
@@ -116,9 +190,15 @@ export default function ChatView({
         messages={messages}
         contactName={contactName}
         onPreviewDoc={onPreviewDoc}
+        showActions={!!conversation?.notion_dossier_id}
+        onSaveToFolder={onSaveToFolder}
+        onCreateTaskFromDoc={onCreateTaskFromDoc}
         onLoadMore={onLoadMoreMessages}
         hasMoreMessages={hasMoreMessages}
         isLoadingMore={isLoadingMore}
+        selectionMode={selectionMode}
+        selectedMediaIds={selectedMediaIds}
+        toggleMediaSelection={toggleMediaSelection}
       />
 
       {/* Connection status warning */}
@@ -129,6 +209,39 @@ export default function ChatView({
           </svg>
           <span>WhatsApp déconnecté. Reconnectez-vous dans les paramètres.</span>
         </div>
+      )}
+
+      {/* Collect result notification */}
+      {collectResult && (
+        <div className={`absolute top-16 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg shadow-lg z-20 text-sm ${collectResult.error ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+          {collectResult.error ? `❌ ${collectResult.error}` : `📂 ${collectResult.summary || 'Envoyé au Drive'}`}
+        </div>
+      )}
+
+      {/* Floating selection action bar */}
+      {selectionMode && selectedMediaIds.size > 0 && (
+        <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-3 z-20">
+          <span className="text-sm">{selectedMediaIds.size} sélectionnés</span>
+          <button onClick={() => selectAllMedia()} className="text-xs text-gray-300 hover:text-white">Tout</button>
+          <button onClick={() => setShowSaveModal(true)} className="px-3 py-1 bg-green-600 rounded-full text-sm hover:bg-green-700">Sauvegarder</button>
+          <button onClick={handleCollectAllToDrive} disabled={isCollecting} className="px-3 py-1 bg-blue-600 rounded-full text-sm hover:bg-blue-700 disabled:opacity-50">
+            {isCollecting ? '⏳ Envoi...' : '📂 Tout → A TRIER'}
+          </button>
+          <button onClick={() => { setSelectionMode(false); setSelectedMediaIds(new Set()); }} className="text-gray-400 hover:text-white text-sm">Annuler</button>
+        </div>
+      )}
+
+      {/* Save to Drive modal */}
+      {showSaveModal && (
+        <SaveToDriveModal
+          isOpen={showSaveModal}
+          onClose={() => { setShowSaveModal(false); setSelectionMode(false); setSelectedMediaIds(new Set()); }}
+          selectedMessages={messages.filter(m => selectedMediaIds.has(m.id))}
+          dossierDriveUrl={conversation?.drive_url || ''}
+          dossierName={conversation?.notion_dossier_name || ''}
+          contactName={contactName}
+          conversationJid={conversation?.jid}
+        />
       )}
 
       {/* Input */}

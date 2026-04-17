@@ -1,5 +1,7 @@
 'use client';
 
+import { useState, useEffect } from 'react';
+
 // Status indicator colors for CRM
 const STATUS_COLORS = {
   client: 'bg-emerald-500',
@@ -54,6 +56,14 @@ export default function ChatHeader({
   onMenu,
   onAddTask,
   onAddProject,
+  onShowDocuments,
+  onToggleSelection,
+  onUpdateStatus,
+  onLinkProject,
+  onCollectAllToDrive,
+  isCollecting = false,
+  selectionMode = false,
+  documentCount = 0,
   showCRMPanel = false,
   isMobile = false
 }) {
@@ -74,8 +84,14 @@ export default function ChatHeader({
 
   const displayName = display_name || name || whatsapp_name || phone || 'Contact';
   const initials = avatar_initials || getInitials(displayName);
-  const statusColor = STATUS_COLORS[status] || STATUS_COLORS.inbox;
-  const statusLabel = STATUS_LABELS[status] || 'À classer';
+  const [localStatus, setLocalStatus] = useState(status || 'inbox');
+
+  useEffect(() => {
+    setLocalStatus(status || 'inbox');
+  }, [status]);
+
+  const statusColor = STATUS_COLORS[localStatus] || STATUS_COLORS.inbox;
+  const statusLabel = STATUS_LABELS[localStatus] || 'À classer';
   const lastSeen = formatLastSeen(last_message_time);
   const hasDossier = !!notion_dossier_id;
 
@@ -108,9 +124,31 @@ export default function ChatHeader({
           <h2 className="text-base font-semibold text-gray-900 truncate">
             {displayName}
           </h2>
-          <span className={`flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium ${statusColor} text-white`}>
-            {statusLabel}
-          </span>
+          <select
+            value={localStatus}
+            onChange={(e) => {
+              const newStatus = e.target.value;
+              setLocalStatus(newStatus);
+              if (onUpdateStatus) {
+                onUpdateStatus(newStatus);
+              } else {
+                // Direct API call as fallback if callback not wired
+                const jid = conversation?.jid;
+                if (jid) {
+                  fetch('/api/whatsapp/update-status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ jid, status: newStatus })
+                  }).then(() => window.location.reload());
+                }
+              }
+            }}
+            className={`flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium ${statusColor} text-white border-0 cursor-pointer appearance-auto`}
+          >
+            {Object.entries(STATUS_LABELS).map(([id, label]) => (
+              <option key={id} value={id}>{label}</option>
+            ))}
+          </select>
           {hasDossier && (
             <span className="flex-shrink-0 text-[10px] px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded font-medium">
               📁 {notion_dossier_name || 'Dossier'}
@@ -139,19 +177,66 @@ export default function ChatHeader({
 
         {/* Quick add project */}
         <button
-          onClick={onAddProject}
+          onClick={(e) => { e.stopPropagation(); if (onAddProject) onAddProject(); else window.dispatchEvent(new Event('open-project-modal')); }}
           className="flex items-center gap-1 px-2 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
-          title="Ajouter un projet"
+          title="Créer un nouveau projet"
         >
           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
           </svg>
           Projet
         </button>
+        {/* Link existing project */}
+        <button
+          onClick={(e) => { e.stopPropagation(); if (onLinkProject) onLinkProject(); else window.dispatchEvent(new Event('open-link-project-modal')); }}
+          className="flex items-center gap-1 px-1.5 py-1.5 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors"
+          title="Lier un projet existant"
+        >
+          🔗
+        </button>
       </div>
 
       {/* Other action buttons */}
       <div className="flex items-center gap-0.5">
+        {/* Show documents */}
+        <button
+          onClick={onShowDocuments}
+          className="p-2 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors relative"
+          title="Documents"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+          </svg>
+          {documentCount > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 bg-indigo-500 text-white text-[10px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+              {documentCount}
+            </span>
+          )}
+        </button>
+
+        {/* Collect all docs to A TRIER */}
+        <button
+          onClick={onCollectAllToDrive}
+          disabled={isCollecting}
+          className={`p-2 rounded-full transition-colors ${isCollecting ? 'bg-blue-100 text-blue-600 animate-pulse' : 'text-gray-400 hover:text-blue-600 hover:bg-blue-50'}`}
+          title="Envoyer tous les docs vers A TRIER"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+          </svg>
+        </button>
+
+        {/* Select documents */}
+        <button
+          onClick={onToggleSelection}
+          className={`p-2 rounded-full transition-colors ${selectionMode ? 'bg-green-100 text-green-700' : 'text-gray-500 hover:bg-gray-100'}`}
+          title="Sélectionner des documents"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </button>
+
         {/* Search in conversation */}
         <button
           onClick={onSearch}
