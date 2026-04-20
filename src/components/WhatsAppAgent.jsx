@@ -1912,6 +1912,59 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
     loadConversations();
   }, [loadConversations]);
 
+  // V2 wrappers — adapt V1 handlers to work with v2SelectedConv
+  const handleV2LinkDossier = useCallback(async (dossierId, dossierName, dossierUrl) => {
+    const jid = v2SelectedConvRef.current?.jid;
+    if (!jid) return;
+    try {
+      const c = conversations.find(cv => cv.jid === jid);
+      if (c?.notion_contact_id) {
+        await fetch('/api/notion/update-contact-dossier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contact_id: c.notion_contact_id, dossier_id: dossierId }) });
+      }
+      await fetch('/api/notion/link-dossier', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jid, dossierId, dossierName, dossierUrl: dossierUrl || '' }) });
+      loadConversations();
+      loadDossierDetails(dossierId);
+      const updatedConv = { ...v2SelectedConvRef.current, notion_dossier_id: dossierId, notion_dossier_name: dossierName };
+      setV2SelectedConv(updatedConv);
+    } catch (e) { alert('Erreur: ' + e.message); }
+  }, [conversations, loadConversations, loadDossierDetails]);
+
+  const handleV2UnlinkDossier = useCallback(async () => {
+    const jid = v2SelectedConvRef.current?.jid;
+    if (!jid) return;
+    await api('update-status', 'POST', { jid, notion_dossier_id: null, notion_dossier_name: null, notion_dossier_url: null });
+    loadConversations();
+    setDossierDetails(null);
+    setV2SelectedConv(prev => prev ? { ...prev, notion_dossier_id: null, notion_dossier_name: null } : prev);
+  }, [loadConversations]);
+
+  const handleV2UpdateName = useCallback(async (name) => {
+    const jid = v2SelectedConvRef.current?.jid;
+    if (!jid || !name?.trim()) return;
+    await api('update-status', 'POST', { jid, custom_name: name.trim() });
+    loadConversations();
+  }, [loadConversations]);
+
+  const handleV2UpdateEmail = useCallback(async (email) => {
+    const jid = v2SelectedConvRef.current?.jid;
+    if (!jid) return;
+    await api('update-status', 'POST', { jid, email: email?.trim() || '' });
+    loadConversations();
+  }, [loadConversations]);
+
+  const handleV2UpdatePhone = useCallback(async (phone) => {
+    const jid = v2SelectedConvRef.current?.jid;
+    if (!jid) return;
+    await api('update-status', 'POST', { jid, phone: phone?.trim() || '' });
+    loadConversations();
+  }, [loadConversations]);
+
+  const handleV2UpdateNotes = useCallback(async (notes) => {
+    const jid = v2SelectedConvRef.current?.jid;
+    if (!jid) return;
+    await api('update-status', 'POST', { jid, notes });
+  }, []);
+
   const ConversationsV2 = () => (
     <div className="h-full">
       <ConversationLayout
@@ -1930,6 +1983,12 @@ Commence par analyser la conversation WhatsApp, puis le screening email.`;
         onFilterChange={setV2ActiveFilter}
         isSending={v2IsSending}
         onUpdateStatus={handleV2UpdateStatus}
+        onUpdateName={handleV2UpdateName}
+        onUpdateEmail={handleV2UpdateEmail}
+        onUpdatePhone={handleV2UpdatePhone}
+        onUpdateNotes={handleV2UpdateNotes}
+        onLinkDossier={handleV2LinkDossier}
+        onUnlinkDossier={handleV2UnlinkDossier}
         onLinkConversation={handleLinkConversation}
         onUnlinkConversation={handleUnlinkConversation}
         onAddTask={() => setShowV2TaskModal(true)}

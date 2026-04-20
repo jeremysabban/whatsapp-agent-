@@ -9,15 +9,28 @@ export async function POST(request) {
       return NextResponse.json({ error: 'contact_id and dossier_id required' }, { status: 400 });
     }
 
-    // Update the contact's "💬 Dossier" relation in Notion
+    const pageRes = await fetch(`https://api.notion.com/v1/pages/${contact_id}`, {
+      headers: notionHeaders(),
+    });
+    if (!pageRes.ok) {
+      const err = await pageRes.json();
+      return NextResponse.json({ error: err.message || `Notion ${pageRes.status}` }, { status: pageRes.status });
+    }
+    const page = await pageRes.json();
+    const existingRelations = page.properties?.['💬 Dossier']?.relation || [];
+
+    if (existingRelations.some(r => r.id === dossier_id)) {
+      return NextResponse.json({ success: true, message: 'Already linked' });
+    }
+
+    const newRelations = [...existingRelations, { id: dossier_id }];
+
     const res = await fetch(`https://api.notion.com/v1/pages/${contact_id}`, {
       method: 'PATCH',
       headers: notionHeaders(),
       body: JSON.stringify({
         properties: {
-          '💬 Dossier': {
-            relation: [{ id: dossier_id }],
-          },
+          '💬 Dossier': { relation: newRelations },
         },
       }),
     });
@@ -27,7 +40,7 @@ export async function POST(request) {
       return NextResponse.json({ error: err.message || `Notion ${res.status}` }, { status: res.status });
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, relationsCount: newRelations.length });
   } catch (err) {
     console.error('Update contact dossier error:', err);
     return NextResponse.json({ error: err.message }, { status: 500 });
