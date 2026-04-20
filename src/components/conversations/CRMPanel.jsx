@@ -47,6 +47,109 @@ function Section({ title, icon, children, defaultOpen = true, badge = null }) {
   );
 }
 
+// Notion contact linker — create or search+link a Notion contact
+function NotionContactLinker({ conversation, onLinked }) {
+  const [mode, setMode] = useState(null); // null | 'search' | 'create'
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [createName, setCreateName] = useState('');
+
+  const jid = conversation?.jid;
+  const phone = conversation?.phone || conversation?.jid?.split('@')[0] || '';
+  const displayName = conversation?.display_name || conversation?.name || conversation?.whatsapp_name || '';
+
+  const handleSearch = async (q) => {
+    setQuery(q);
+    if (q.length < 2) { setResults([]); return; }
+    setLoading(true);
+    try {
+      const r = await fetch('/api/notion/search-contacts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: q }) });
+      const d = await r.json();
+      setResults(d.results || []);
+    } catch { setResults([]); }
+    setLoading(false);
+  };
+
+  const handleLink = async (contact) => {
+    try {
+      await fetch('/api/notion/link-notion-contact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jid, notionContactId: contact.id, notionContactName: contact.name, notionContactUrl: contact.url }) });
+      setMode(null);
+      onLinked?.();
+      window.location.reload();
+    } catch (e) { alert('Erreur: ' + e.message); }
+  };
+
+  const handleCreate = async () => {
+    if (!createName.trim()) return;
+    setLoading(true);
+    try {
+      const r = await fetch('/api/notion/sync-contact', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: createName.trim(), phone, email: conversation?.email || null, dossierId: conversation?.notion_dossier_id || null }) });
+      const d = await r.json();
+      if (d.success && d.contactId) {
+        await fetch('/api/whatsapp/update-status', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jid, notion_contact_id: d.contactId, notion_contact_name: createName.trim(), notion_contact_url: d.contactUrl || null }) });
+        setMode(null);
+        onLinked?.();
+        window.location.reload();
+      } else { alert('Erreur: ' + (d.error || '?')); }
+    } catch (e) { alert('Erreur: ' + e.message); }
+    setLoading(false);
+  };
+
+  if (!mode) {
+    return (
+      <div className="mt-2 flex gap-1.5">
+        <button onClick={() => { setMode('search'); setQuery(displayName); handleSearch(displayName); }}
+          className="flex-1 px-2 py-1.5 text-[11px] font-medium rounded border border-indigo-200 text-indigo-600 bg-indigo-50 hover:bg-indigo-100">
+          🔗 Lier contact Notion
+        </button>
+        <button onClick={() => { setMode('create'); setCreateName(displayName); }}
+          className="flex-1 px-2 py-1.5 text-[11px] font-medium rounded border border-emerald-200 text-emerald-600 bg-emerald-50 hover:bg-emerald-100">
+          👤+ Créer contact
+        </button>
+      </div>
+    );
+  }
+
+  if (mode === 'create') {
+    return (
+      <div className="mt-2 space-y-1.5">
+        <input value={createName} onChange={e => setCreateName(e.target.value)} placeholder="Nom du contact"
+          className="w-full px-2 py-1.5 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500" autoFocus
+          onKeyDown={e => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') setMode(null); }} />
+        <div className="flex gap-1.5">
+          <button onClick={handleCreate} disabled={loading || !createName.trim()}
+            className="flex-1 px-2 py-1 text-[11px] bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-40">
+            {loading ? '...' : '✓ Créer et lier'}
+          </button>
+          <button onClick={() => setMode(null)} className="px-2 py-1 text-[11px] text-gray-500">Annuler</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-1.5">
+      <input value={query} onChange={e => handleSearch(e.target.value)} placeholder="Rechercher un contact Notion..."
+        className="w-full px-2 py-1.5 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500" autoFocus />
+      {loading && <p className="text-[10px] text-gray-400">Recherche...</p>}
+      {results.length > 0 && (
+        <div className="max-h-[150px] overflow-y-auto space-y-0.5">
+          {results.map(c => (
+            <button key={c.id} onClick={() => handleLink(c)}
+              className="w-full text-left px-2 py-1.5 rounded hover:bg-indigo-50 text-xs">
+              <span className="font-medium">{c.name}</span>
+              {c.phone && <span className="text-gray-400 ml-1">{c.phone}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {query.length >= 2 && !loading && results.length === 0 && <p className="text-[10px] text-gray-400">Aucun résultat</p>}
+      <button onClick={() => setMode(null)} className="text-[10px] text-gray-500 hover:text-gray-700">Annuler</button>
+    </div>
+  );
+}
+
 // Contact section - Compact version
 function ContactSection({ conversation, notionEmail, onUpdateStatus, onUpdateName, onUpdateEmail, onUpdatePhone, onLinkEmail }) {
   const [editingName, setEditingName] = useState(false);
@@ -179,19 +282,75 @@ function ContactSection({ conversation, notionEmail, onUpdateStatus, onUpdateNam
   );
 }
 
-// Dossier section
+// Dossier section with inline search
 function DossierSection({ dossier, onLink, onUnlink, isLoading }) {
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const handleSearch = async (q) => {
+    setQuery(q);
+    if (q.length < 2) { setResults([]); return; }
+    setLoading(true);
+    try {
+      const r = await fetch('/api/notion/search-dossiers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: q }) });
+      const d = await r.json();
+      setResults(d.results || d.dossiers || []);
+    } catch { setResults([]); }
+    setLoading(false);
+  };
+
+  const handleSelect = (d) => {
+    onLink?.(d.id, d.name, d.url || '');
+    setSearching(false);
+    setQuery('');
+    setResults([]);
+  };
+
   if (!dossier) {
     return (
-      <div className="text-center py-4">
-        <p className="text-sm text-[#667781] mb-3">Aucun dossier lié</p>
-        <button
-          onClick={onLink}
-          disabled={isLoading}
-          className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50"
-        >
-          🔗 Lier un dossier
-        </button>
+      <div className="py-2">
+        {!searching ? (
+          <div className="text-center">
+            <p className="text-sm text-[#667781] mb-3">Aucun dossier lié</p>
+            <button
+              onClick={() => setSearching(true)}
+              disabled={isLoading}
+              className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50"
+            >
+              🔗 Lier un dossier
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <input
+              type="text"
+              value={query}
+              onChange={e => handleSearch(e.target.value)}
+              placeholder="Rechercher un dossier..."
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+              autoFocus
+            />
+            {loading && <p className="text-xs text-gray-400 px-1">Recherche...</p>}
+            {results.length > 0 && (
+              <div className="max-h-[200px] overflow-y-auto space-y-1">
+                {results.map(d => (
+                  <button key={d.id} onClick={() => handleSelect(d)}
+                    className="w-full text-left px-3 py-2 rounded-lg hover:bg-indigo-50 border border-transparent hover:border-indigo-200 text-sm">
+                    <span className="font-medium text-gray-800">{d.name}</span>
+                    {d.identifiant && <span className="text-xs text-gray-500 ml-2">{d.identifiant}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+            {query.length >= 2 && !loading && results.length === 0 && (
+              <p className="text-xs text-gray-400 px-1">Aucun résultat</p>
+            )}
+            <button onClick={() => { setSearching(false); setQuery(''); setResults([]); }}
+              className="text-xs text-gray-500 hover:text-gray-700">Annuler</button>
+          </div>
+        )}
       </div>
     );
   }
@@ -210,18 +369,18 @@ function DossierSection({ dossier, onLink, onUnlink, isLoading }) {
         </div>
         <div className="flex gap-1">
           {dossier.url && (
-            <a
-              href={dossier.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg"
-              title="Ouvrir dans Notion"
-            >
+            <a href={dossier.url} target="_blank" rel="noopener noreferrer"
+              className="p-2 text-indigo-600 hover:bg-indigo-100 rounded-lg" title="Ouvrir dans Notion">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
               </svg>
             </a>
           )}
+          <button onClick={onUnlink} className="p-2 text-red-400 hover:bg-red-50 hover:text-red-600 rounded-lg" title="Délier le dossier">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
       </div>
     </div>
@@ -747,6 +906,18 @@ export default function CRMPanel({
             onUpdatePhone={onUpdatePhone}
             onLinkEmail={(email) => onUpdateEmail?.(email)}
           />
+          {!conversation.notion_contact_id && (
+            <NotionContactLinker conversation={conversation} onLinked={() => { /* refresh handled by parent */ }} />
+          )}
+          {conversation.notion_contact_id && (
+            <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-600">
+              <span>✅</span>
+              <span className="truncate">{conversation.notion_contact_name || 'Contact Notion lié'}</span>
+              {conversation.notion_contact_url && (
+                <a href={conversation.notion_contact_url} target="_blank" rel="noopener noreferrer" className="text-indigo-500 hover:underline ml-auto">Notion ↗</a>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Dossier Notion */}
