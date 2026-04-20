@@ -10,8 +10,12 @@ export async function GET(request, { params }) {
     const days = parseInt(searchParams.get('days') || '7', 10);
     const db = getDb();
 
-    const dossier = db.prepare('SELECT name FROM dossiers WHERE id = ?').get(id);
+    const dossier = db.prepare('SELECT name, url, drive_url FROM dossiers WHERE id = ?').get(id);
     if (!dossier) return NextResponse.json({ error: 'Dossier not found' }, { status: 404 });
+
+    const contacts = db.prepare('SELECT name, email, phone FROM contacts WHERE dossier_id = ?').all(id);
+    const contracts = db.prepare('SELECT name, type_assurance, cie_details, date_effet, desactive FROM contracts WHERE dossier_id = ? ORDER BY date_effet DESC').all(id);
+    const activeContracts = contracts.filter(c => !c.desactive);
 
     const cutoff = Math.floor((Date.now() - days * 86400000) / 1000);
     const convs = db.prepare('SELECT jid, name, whatsapp_name FROM conversations WHERE notion_dossier_id = ?').all(id);
@@ -76,8 +80,29 @@ export async function GET(request, { params }) {
       return `${dateStr} ${timeStr} | ${who} : ${content}`;
     });
 
-    const header = `RESUME WHATSAPP — ${dossier.name} — ${days} derniers jours (${allMsgs.length} messages)`;
-    const summary = `${header}\n${'─'.repeat(60)}\n${lines.join('\n')}`;
+    const contactLines = contacts.length
+      ? contacts.map(c => `- ${c.name || '?'}${c.email ? ' · ' + c.email : ''}${c.phone ? ' · ' + c.phone : ''}`).join('\n')
+      : '- Aucun contact';
+    const contractLines = activeContracts.length
+      ? activeContracts.map(c => `- ${c.name} · ${c.type_assurance || '?'}${c.cie_details ? ' · ' + c.cie_details : ''}${c.date_effet ? ' · effet ' + c.date_effet : ''}`).join('\n')
+      : '- Aucun contrat actif';
+
+    const summary = [
+      `DOSSIER : ${dossier.name}`,
+      `CONTACTS :`,
+      contactLines,
+      `CONTRATS ACTIFS :`,
+      contractLines,
+      '',
+      `SOURCES :`,
+      `- Notion : ${dossier.url || 'non renseigne'}`,
+      `- Google Drive : ${dossier.drive_url || 'non renseigne'}`,
+      '',
+      `MESSAGES WHATSAPP (${days} derniers jours, ${allMsgs.length} messages) :`,
+      lines.join('\n'),
+      '',
+      `Voici la mise a jour WhatsApp du dossier. Analyse les echanges et dis-moi ce qui est en suspens ou necessite une action.`,
+    ].join('\n');
 
     return NextResponse.json({ summary, count: allMsgs.length });
   } catch (e) {
